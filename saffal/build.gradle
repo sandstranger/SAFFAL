@@ -1,11 +1,11 @@
 apply plugin: 'com.android.library'
 
 android {
-    compileSdkVersion 34
+    compileSdkVersion 35
 
     defaultConfig {
-        minSdkVersion 16
-        targetSdkVersion 34
+        minSdkVersion 19
+        targetSdkVersion 35
         versionCode 1
         versionName "1.0"
 
@@ -37,10 +37,10 @@ android {
         }
     }
     ndkVersion '24.0.8215888'
+    namespace 'com.opentouchgaming.saffal'
 }
 
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
-    implementation 'androidx.appcompat:appcompat:1.6.0'
     implementation 'androidx.documentfile:documentfile:1.0.1'
 }
