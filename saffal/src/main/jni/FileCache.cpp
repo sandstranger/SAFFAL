@@ -12,7 +12,7 @@
 
 #include <android/log.h>
 
-static const int MAXIMUM_CACHED_FILES = 1024 * 2;
+static const int MAXIMUM_CACHED_FILES = 256;
 
 #if 0
 #define LOGI(...) ((void)__android_log_print(ANDROID_LOG_INFO,"FileCache NDK", __VA_ARGS__))
@@ -167,7 +167,7 @@ static void closeFd(int fd)
 			int fdCopy = dup(fd);
 
 			// Save new fd to the free cache
-			LOGI("FileCache_closeFile CACHEING %d", fdCopy);
+			LOGI("FileCache_closeFile CACHEING %d, cache size = %d", fdCopy, cacheFree.size());
 
 			cacheFree[cacheActive[fd]] = fdCopy;
 		}
