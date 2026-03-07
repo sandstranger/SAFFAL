@@ -19,18 +19,6 @@ android {
         }
     }
 
-    tasks.whenTaskAdded { task ->
-        if (task.name.equals("compileDebugNdk")) {
-            task.enabled = false
-        }
-    }
-
-    tasks.whenTaskAdded { task ->
-        if (task.name.equals("compileReleaseNdk")) {
-            task.enabled = false
-        }
-    }
-
     externalNativeBuild {
         ndkBuild {
             path file('src/main/jni/Android_dummy.mk')
@@ -42,5 +30,5 @@ android {
 
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
-    implementation 'androidx.documentfile:documentfile:1.0.1'
+    implementation 'androidx.documentfile:documentfile:1.0.1' // Version needed for API 19
 }
