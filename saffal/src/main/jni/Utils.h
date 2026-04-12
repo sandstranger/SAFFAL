@@ -2,9 +2,14 @@
 #include <utility>
 
 /*
-     Set at init to set the SAF path
+     Add a SAF root path to the list of monitored paths
 */
-void setSAFPath(std::string safPath);
+void addSAFPath(std::string safPath);
+
+/*
+     Clear all SAF root paths
+*/
+void clearSAFPaths();
 
 /*
      Remove . ./ ../ etc from a path

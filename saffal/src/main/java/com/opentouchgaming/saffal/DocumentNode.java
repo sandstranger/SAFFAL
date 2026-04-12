@@ -25,6 +25,8 @@ public class DocumentNode
     public long size;
     public long modifiedDate;
     public DocumentNode parent;
+    // The SAF tree URI this node belongs to (set on root nodes, propagated to all children)
+    public Uri treeUri;
 
     private List<DocumentNode> children;
 
@@ -173,7 +175,7 @@ public class DocumentNode
             {
                 children = new ArrayList<>();
 
-                Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(UtilsSAF.getTreeRoot().uri, documentId);
+                Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId);
 
                 Cursor cursor = null;
                 try
@@ -187,6 +189,7 @@ public class DocumentNode
                     {
                         DocumentNode newNode = new DocumentNode();
                         newNode.parent = this;
+                        newNode.treeUri = this.treeUri;
                         newNode.exists = true;
                         newNode.name = cursor.getString(0);
                         newNode.isDirectory = DocumentsContract.Document.MIME_TYPE_DIR.equals(cursor.getString(1));
@@ -242,7 +245,7 @@ public class DocumentNode
             }
             else
             {
-                Uri myUri = DocumentsContract.buildChildDocumentsUriUsingTree(UtilsSAF.getTreeRoot().uri, documentId);
+                Uri myUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId);
 
                 try
                 {
@@ -283,7 +286,7 @@ public class DocumentNode
             }
             else
             {
-                Uri myUri = DocumentsContract.buildChildDocumentsUriUsingTree(UtilsSAF.getTreeRoot().uri, child.documentId);
+                Uri myUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, child.documentId);
 
                 // clear cache
                 clearCache();
@@ -301,7 +304,7 @@ public class DocumentNode
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public InputStream getInputStream() throws FileNotFoundException
     {
-        Uri myUri = DocumentsContract.buildChildDocumentsUriUsingTree(UtilsSAF.getTreeRoot().uri, documentId);
+        Uri myUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId);
 
         return UtilsSAF.getContentResolver().openInputStream(myUri);
     }
@@ -309,7 +312,7 @@ public class DocumentNode
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public OutputStream getOutputStream() throws FileNotFoundException
     {
-        Uri myUri = DocumentsContract.buildChildDocumentsUriUsingTree(UtilsSAF.getTreeRoot().uri, documentId);
+        Uri myUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId);
 
         return UtilsSAF.getContentResolver().openOutputStream(myUri);
     }

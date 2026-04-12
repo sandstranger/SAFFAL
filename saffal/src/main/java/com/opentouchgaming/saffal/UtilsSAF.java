@@ -21,6 +21,8 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
 
 public class UtilsSAF
 {
@@ -31,14 +33,7 @@ public class UtilsSAF
     static int cacheNativeFs = 0;
     static boolean CASE_INSENSITIVE = true;
 
-    /*
-        TODO: Only one tree root possible at the moment, this should be extended to a list so we can have
-        multiple roots E.G internal phone flash, and SD Card
-    */
-    static TreeRoot treeRoot;
-
-    // The root node of the selected SAF folder
-    static DocumentNode documentRoot;
+    static List<TreeRoot> treeRoots = new ArrayList<>();
 
     /**
      * Set a Context so all operations don't need to pass in a new one
@@ -54,31 +49,109 @@ public class UtilsSAF
     }
 
     /**
-     * Get the current tree root
+     * Get the first tree root (for backward compatibility).
      *
-     * @return treeRoot;
+     * @return first TreeRoot, or null if none set.
      */
     public static TreeRoot getTreeRoot()
     {
-        return treeRoot;
+        return treeRoots.isEmpty() ? null : treeRoots.get(0);
     }
 
     /**
-     * Set a new URI and root path for the URI
+     * Get all tree roots.
+     */
+    public static List<TreeRoot> getTreeRoots()
+    {
+        return treeRoots;
+    }
+
+    /**
+     * Replace all roots with a single root (backward-compatible equivalent of the old setTreeRoot).
      *
      * @param treeRoot the uri and root path.
      */
     public static void setTreeRoot(@NonNull TreeRoot treeRoot)
     {
-        UtilsSAF.treeRoot = treeRoot;
+        treeRoots.clear();
+        addTreeRoot(treeRoot);
+    }
 
-        documentRoot = new DocumentNode();
+    /**
+     * Add a new root alongside any existing roots.
+     *
+     * @param treeRoot the uri and root path to add.
+     */
+    public static void addTreeRoot(@NonNull TreeRoot treeRoot)
+    {
+        DocumentNode documentRoot = new DocumentNode();
         documentRoot.name = "root";
         documentRoot.isDirectory = true;
         documentRoot.documentId = treeRoot.rootDocumentId;
+        documentRoot.treeUri = treeRoot.uri;
+        treeRoot.documentRoot = documentRoot;
 
-        // Update the C library with the root path
-        FileJNI.init(treeRoot.rootPath, cacheNativeFs);
+        treeRoots.add(treeRoot);
+
+        rebuildNativePaths();
+    }
+
+    /**
+     * Remove the root whose rootPath matches the given path.
+     */
+    public static void removeTreeRoot(@NonNull String rootPath)
+    {
+        treeRoots.removeIf(r -> r.rootPath.equals(rootPath));
+        rebuildNativePaths();
+    }
+
+    /**
+     * Remove all tree roots.
+     */
+    public static void clearTreeRoots()
+    {
+        treeRoots.clear();
+        rebuildNativePaths();
+    }
+
+    /**
+     * Rebuild the native SAF path list to match the current treeRoots.
+     */
+    private static void rebuildNativePaths()
+    {
+        String[] paths = new String[treeRoots.size()];
+        for (int i = 0; i < treeRoots.size(); i++)
+        {
+            paths[i] = treeRoots.get(i).rootPath;
+        }
+        FileJNI.initSAFPaths(paths, cacheNativeFs);
+    }
+
+    /**
+     * Return the TreeRoot whose rootPath is a prefix of the given path, or null.
+     */
+    public static TreeRoot getTreeRootForPath(String path)
+    {
+        for (TreeRoot root : treeRoots)
+        {
+            if (path.startsWith(root.rootPath))
+                return root;
+        }
+        return null;
+    }
+
+    /**
+     * Find the DocumentNode for a full filesystem path across all registered roots.
+     *
+     * @return DocumentNode if found, otherwise null.
+     */
+    public static DocumentNode findDocumentNode(String fullPath)
+    {
+        TreeRoot root = getTreeRootForPath(fullPath);
+        if (root == null)
+            return null;
+        String documentPath = getDocumentPath(fullPath, root);
+        return DocumentNode.findDocumentNode(root.documentRoot, documentPath);
     }
 
     /**
@@ -109,49 +182,76 @@ public class UtilsSAF
     }
 
     /**
-     * Save the currently set URI and root path so loadTreeRoot can work
+     * Save all registered roots to SharedPreferences so loadTreeRoots can restore them.
      *
      * @param ctx A Context
      */
-    public static void saveTreeRoot(Context ctx)
+    public static void saveTreeRoots(Context ctx)
     {
-        if (treeRoot != null && treeRoot.uri != null && treeRoot.rootPath != null && treeRoot.rootDocumentId != null)
+        SharedPreferences prefs = ctx.getSharedPreferences("utilsSAF", 0);
+        SharedPreferences.Editor prefsEdit = prefs.edit();
+
+        int count = 0;
+        for (TreeRoot root : treeRoots)
         {
-            SharedPreferences prefs = ctx.getSharedPreferences("utilsSAF", 0);
-            SharedPreferences.Editor prefsEdit = prefs.edit();
-            prefsEdit.putString("uri", treeRoot.uri.toString());
-            prefsEdit.putString("rootPath", treeRoot.rootPath);
-            prefsEdit.putString("rootDocumentId", treeRoot.rootDocumentId);
-            prefsEdit.commit();
+            if (root.uri != null && root.rootPath != null && root.rootDocumentId != null)
+            {
+                prefsEdit.putString("uri_" + count, root.uri.toString());
+                prefsEdit.putString("rootPath_" + count, root.rootPath);
+                prefsEdit.putString("rootDocumentId_" + count, root.rootDocumentId);
+                count++;
+            }
         }
-        else
-        {
-            DBG("saveTreeRoot: ERROR, treeRoot not complete");
-        }
+        prefsEdit.putInt("count", count);
+        prefsEdit.apply();
     }
 
+    /** @deprecated Use {@link #saveTreeRoots(Context)} */
+    public static void saveTreeRoot(Context ctx) { saveTreeRoots(ctx); }
+
     /**
-     * Load the last save URI and root
+     * Load all previously saved roots. Restores the full set of roots from SharedPreferences.
+     * Falls back to the legacy single-root format if no multi-root data is found.
      *
      * @param ctx A Context
+     * @return true if at least one root was loaded successfully.
      */
-    public static boolean loadTreeRoot(Context ctx)
+    public static boolean loadTreeRoots(Context ctx)
     {
         try
         {
             SharedPreferences prefs = ctx.getSharedPreferences("utilsSAF", 0);
 
-            String url = prefs.getString("uri", null);
-            if (url != null)
+            int count = prefs.getInt("count", 0);
+
+            if (count > 0)
             {
-                Uri treeUri = null;
-                treeUri = Uri.parse(url);
-                String rootPath = prefs.getString("rootPath", null);
-                String rootDocumentId = prefs.getString("rootDocumentId", null);
-                if (rootPath != null && rootDocumentId != null)
+                treeRoots.clear();
+                for (int i = 0; i < count; i++)
                 {
-                    setTreeRoot(new TreeRoot(treeUri, rootPath, rootDocumentId));
-                    return true;
+                    String url = prefs.getString("uri_" + i, null);
+                    String rootPath = prefs.getString("rootPath_" + i, null);
+                    String rootDocumentId = prefs.getString("rootDocumentId_" + i, null);
+                    if (url != null && rootPath != null && rootDocumentId != null)
+                    {
+                        addTreeRoot(new TreeRoot(Uri.parse(url), rootPath, rootDocumentId));
+                    }
+                }
+                return !treeRoots.isEmpty();
+            }
+            else
+            {
+                // Fall back to legacy single-root format
+                String url = prefs.getString("uri", null);
+                if (url != null)
+                {
+                    String rootPath = prefs.getString("rootPath", null);
+                    String rootDocumentId = prefs.getString("rootDocumentId", null);
+                    if (rootPath != null && rootDocumentId != null)
+                    {
+                        setTreeRoot(new TreeRoot(Uri.parse(url), rootPath, rootDocumentId));
+                        return true;
+                    }
                 }
             }
         }
@@ -162,52 +262,56 @@ public class UtilsSAF
         return false;
     }
 
+    /** @deprecated Use {@link #loadTreeRoots(Context)} */
+    public static boolean loadTreeRoot(Context ctx) { return loadTreeRoots(ctx); }
+
     /**
-     * Returns true when SAF files are ready to be accessed. Note does not tell you the correct URI was chosen by the user.
+     * Returns true when at least one SAF root is configured and a context is set.
      *
      * @return True if ready
      */
     public static boolean ready()
     {
-        return treeRoot != null && treeRoot.uri != null && treeRoot.rootPath != null && treeRoot.rootDocumentId != null && context != null;
+        return !treeRoots.isEmpty() && context != null;
     }
 
     /**
-     * Returns true if the path is in the SAF controlled space
+     * Returns true if the path falls under any registered SAF root.
      *
      * @return True if in SAF space
      */
     public static boolean isInSAFRoot(String path)
     {
-        if (ready())
-            return path.startsWith(treeRoot.rootPath);
-        else
-            return false;
+        return getTreeRootForPath(path) != null;
     }
 
     /**
-     * Returns true if the path is at the start of the SAF root
+     * Returns true if the path is a prefix of (or equal to) any registered SAF root path.
      *
-     * @return True if in SAF space
+     * @return True if path leads into a SAF root
      */
     public static boolean isRootOfSAFRoot(String path)
     {
         if (ready())
         {
             String[] inputPathParts = path.split("/");
-            String[] startStringParts = treeRoot.rootPath.split("/");
-            if (inputPathParts.length > startStringParts.length)
+            for (TreeRoot root : treeRoots)
             {
-                return false;
-            }
-            for (int i = 0; i < inputPathParts.length; i++)
-            {
-                if (!inputPathParts[i].equals(startStringParts[i]))
+                String[] startStringParts = root.rootPath.split("/");
+                if (inputPathParts.length > startStringParts.length)
+                    continue;
+                boolean match = true;
+                for (int i = 0; i < inputPathParts.length; i++)
                 {
-                    return false;
+                    if (!inputPathParts[i].equals(startStringParts[i]))
+                    {
+                        match = false;
+                        break;
+                    }
                 }
+                if (match)
+                    return true;
             }
-            return true;
         }
         return false;
     }
@@ -291,10 +395,9 @@ public class UtilsSAF
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
-    static ParcelFileDescriptor getParcelDescriptor(String documentId, boolean write) throws IOException
+    static ParcelFileDescriptor getParcelDescriptor(String documentId, Uri treeUri, boolean write) throws IOException
     {
-        //DBG("getFd read = " + docFile.canRead() + " write = " + docFile.canWrite() + " name = " + docFile.getName());
-        Uri uri = DocumentsContract.buildChildDocumentsUriUsingTree(UtilsSAF.getTreeRoot().uri, documentId);
+        Uri uri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId);
 
         // NOTE! If we are writing we ALWAYS truncate the file (rwt), this means append won't work, will fix if needed
         ParcelFileDescriptor filePfd = context.getContentResolver().openFileDescriptor(uri, write ? "rwt" : "r");
@@ -303,9 +406,9 @@ public class UtilsSAF
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
-    static boolean renameDocument(String documentId, String newName) throws IOException
+    static boolean renameDocument(String documentId, Uri treeUri, String newName) throws IOException
     {
-        Uri uri = DocumentsContract.buildChildDocumentsUriUsingTree(UtilsSAF.getTreeRoot().uri, documentId);
+        Uri uri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId);
 
         DocumentsContract.renameDocument(context.getContentResolver(), uri, newName);
 
@@ -313,24 +416,29 @@ public class UtilsSAF
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
-    static boolean deleteDocument(String documentId) throws IOException
+    static boolean deleteDocument(String documentId, Uri treeUri) throws IOException
     {
-        Uri uri = DocumentsContract.buildChildDocumentsUriUsingTree(UtilsSAF.getTreeRoot().uri, documentId);
+        Uri uri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId);
 
         return DocumentsContract.deleteDocument(context.getContentResolver(), uri);
     }
 
     public static String getDocumentPath(String fullPath)
     {
-        if (!fullPath.startsWith(treeRoot.rootPath))
+        TreeRoot root = getTreeRootForPath(fullPath);
+        if (root == null)
         {
-            DBG("getDocumentPath: ERROR, filePath (" + fullPath + ") must start with the rootPath (" + treeRoot.rootPath + ")");
+            DBG("getDocumentPath: ERROR, no SAF root matches path: " + fullPath);
             return null;
         }
+        return getDocumentPath(fullPath, root);
+    }
 
-        if (fullPath.length() > treeRoot.rootPath.length())
+    private static String getDocumentPath(String fullPath, TreeRoot root)
+    {
+        if (fullPath.length() > root.rootPath.length())
         {
-            return fullPath.substring(treeRoot.rootPath.length() + 1); // Remove the first "/"
+            return fullPath.substring(root.rootPath.length() + 1); // Remove the leading "/"
         }
         else
         {
@@ -342,11 +450,10 @@ public class UtilsSAF
     {
         String childPath = getDocumentPath(fullPath);
 
-        if (childPath.contentEquals(""))
+        if (childPath == null || childPath.contentEquals(""))
             return new String[0];
         else
             return childPath.split("\\/", -1);
-
     }
 
     private static void DBG(String str)
@@ -363,6 +470,8 @@ public class UtilsSAF
         public Uri uri;
         public String rootPath;
         public String rootDocumentId;
+        // Set by addTreeRoot; holds the root DocumentNode for this tree
+        public DocumentNode documentRoot;
 
         public TreeRoot(Uri uri, String rootPath, String rootDocumentId)
         {

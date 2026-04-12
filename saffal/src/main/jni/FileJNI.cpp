@@ -97,16 +97,23 @@ extern "C" __attribute__((visibility("default"))) jint JNI_OnLoad(JavaVM* vm, vo
 }
 
 
-extern "C" void JNICALL Java_com_opentouchgaming_saffal_FileJNI_init(JNIEnv* env, jclass cls, jstring SAFPath, int cacheNativeFs)
+extern "C" void JNICALL Java_com_opentouchgaming_saffal_FileJNI_initSAFPaths(JNIEnv* env, jclass cls, jobjectArray SAFPaths, jint cacheNativeFs)
 {
-	const char * SAFPathC = (const char *)(env)->GetStringUTFChars(SAFPath, 0);
-	cacheInvalidPaths = cacheNativeFs;
+	cacheInvalidPaths = (cacheNativeFs != 0);
 	LOGI("SAF: Cache invalid paths = %d", cacheInvalidPaths);
 
-	// Save the SAF path so we can check against it in C code
-	setSAFPath(SAFPathC);
+	clearSAFPaths();
 
-	env->ReleaseStringUTFChars(SAFPath, SAFPathC);
+	int count = env->GetArrayLength(SAFPaths);
+	for(int i = 0; i < count; i++)
+	{
+		jstring pathStr = (jstring)env->GetObjectArrayElement(SAFPaths, i);
+		const char* pathC = env->GetStringUTFChars(pathStr, 0);
+		LOGI("SAF: Adding path[%d]: %s", i, pathC);
+		addSAFPath(std::string(pathC));
+		env->ReleaseStringUTFChars(pathStr, pathC);
+		env->DeleteLocalRef(pathStr);
+	}
 }
 
 

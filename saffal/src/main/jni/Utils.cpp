@@ -2,12 +2,13 @@
 
 #include <stdio.h>
 #include <string>
+#include <vector>
 
 #include <android/log.h>
 #define LOGI(...) ((void)__android_log_print(ANDROID_LOG_INFO,"Utils NDK", __VA_ARGS__))
 
 
-static std::string m_SAFPath;
+static std::vector<std::string> m_SAFPaths;
 
 // This is from https://stackoverflow.com/questions/28659344/alternative-to-realpath-to-resolve-and-in-a-path
 #define IS_SLASH(s) (s == '/')
@@ -94,9 +95,14 @@ static void ap_getparents(char *name)
 	}
 }
 
-void setSAFPath(std::string SAFPath)
+void clearSAFPaths()
 {
-	m_SAFPath = SAFPath;
+	m_SAFPaths.clear();
+}
+
+void addSAFPath(std::string SAFPath)
+{
+	m_SAFPaths.push_back(SAFPath);
 }
 
 std::string getCanonicalPath(std::string path)
@@ -112,12 +118,12 @@ std::string getCanonicalPath(std::string path)
 
 bool isInSAF(std::string path)
 {
-	bool isInSAF = false;
-
-	if(m_SAFPath.length() > 0 && path.rfind(m_SAFPath, 0) == 0)
+	for(const auto& safPath : m_SAFPaths)
 	{
-		isInSAF = true;
+		if(safPath.length() > 0 && path.rfind(safPath, 0) == 0)
+		{
+			return true;
+		}
 	}
-
-	return isInSAF;
+	return false;
 }

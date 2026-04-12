@@ -184,9 +184,7 @@ public class FileSAF extends File
             updateDocumentNode(true);
             if (documentNode == null)
             {
-                // Get the path of the parent
-                String parentPath = UtilsSAF.getDocumentPath(getParent());
-                DocumentNode parentNode = DocumentNode.findDocumentNode(UtilsSAF.documentRoot, parentPath);
+                DocumentNode parentNode = UtilsSAF.findDocumentNode(getParent());
 
                 if (parentNode != null && parentNode.isDirectory)
                 {
@@ -216,11 +214,12 @@ public class FileSAF extends File
 
             if (documentNode == null)
             {
-                String documentPath = UtilsSAF.getDocumentPath(fullPath);
+                UtilsSAF.TreeRoot root = UtilsSAF.getTreeRootForPath(fullPath);
 
                 try
                 {
-                    documentNode = DocumentNode.createAllNodes(UtilsSAF.documentRoot, documentPath);
+                    String documentPath = UtilsSAF.getDocumentPath(fullPath);
+                    documentNode = root != null ? DocumentNode.createAllNodes(root.documentRoot, documentPath) : null;
                 }
                 catch (FileNotFoundException e)
                 {
@@ -315,7 +314,7 @@ public class FileSAF extends File
         {
             try
             {
-                parcelFileDescriptor = UtilsSAF.getParcelDescriptor(documentNode.documentId, write);
+                parcelFileDescriptor = UtilsSAF.getParcelDescriptor(documentNode.documentId, documentNode.treeUri, write);
                 if (detach)
                     fd = parcelFileDescriptor.detachFd();
                 else
@@ -426,9 +425,7 @@ public class FileSAF extends File
         }
         else
         {
-            // Get the path of the parent
-            String parentPath = UtilsSAF.getDocumentPath(getParent());
-            DocumentNode parentNode = DocumentNode.findDocumentNode(UtilsSAF.documentRoot, parentPath);
+            DocumentNode parentNode = UtilsSAF.findDocumentNode(getParent());
 
             if (parentNode != null && parentNode.isDirectory)
             {
@@ -462,11 +459,10 @@ public class FileSAF extends File
             if (documentNode != null)
             {
                 // Renames the file
-                UtilsSAF.renameDocument(documentNode.documentId, newName);
+                UtilsSAF.renameDocument(documentNode.documentId, documentNode.treeUri, newName);
 
-                // Get the parent node and clear its cache because it's its changed
-                String parentPath = UtilsSAF.getDocumentPath(getParent());
-                DocumentNode parentNode = DocumentNode.findDocumentNode(UtilsSAF.documentRoot, parentPath);
+                // Get the parent node and clear its cache because it's changed
+                DocumentNode parentNode = UtilsSAF.findDocumentNode(getParent());
 
                 // Clear the cache, not very efficient as clears everything but fine for now
                 if (parentNode != null && parentNode.isDirectory)
@@ -492,9 +488,7 @@ public class FileSAF extends File
     {
         if (documentNode == null || forceUpdate)
         {
-            String documentPath = UtilsSAF.getDocumentPath(fullPath);
-
-            documentNode = DocumentNode.findDocumentNode(UtilsSAF.documentRoot, documentPath);
+            documentNode = UtilsSAF.findDocumentNode(fullPath);
 
             if (documentNode != null)
             {
