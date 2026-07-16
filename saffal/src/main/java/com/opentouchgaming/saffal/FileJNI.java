@@ -100,11 +100,11 @@ public class FileJNI
 
         if (fileSAF.delete())
         {
-            return 1;
+            return 0; // Success is 0 for C remove
         }
         else
         {
-            return 0;
+            return 1;
         }
     }
 
