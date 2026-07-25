@@ -41,7 +41,7 @@ android {
 
     externalNativeBuild {
         ndkBuild {
-            path file('src/main/jni/Android_dummy.mk')
+            path file('src/main/jni/Android.mk')
         }
     }
     compileOptions {
@@ -56,5 +56,5 @@ android {
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
     implementation libs.androidx.documentfile // Version needed for API 19
-    implementation 'androidx.annotation:annotation:1.10.0'
+    implementation libs.androidx.annotation
 }

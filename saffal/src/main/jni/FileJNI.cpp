@@ -78,7 +78,7 @@ extern "C" __attribute__((visibility("default"))) jint JNI_OnLoad(JavaVM* vm, vo
 	pthread_mutex_init(&lock, NULL);
 
 	JNIEnv *env;
-	vm->GetEnv((void **) &env, JNI_VERSION_1_4);
+	vm->GetEnv((void **) &env, JNI_VERSION_1_6);
 
 	jclass cls = (env)->FindClass("com/opentouchgaming/saffal/FileJNI");
 	FileJNI_cls = (jclass)(env->NewGlobalRef(cls));
