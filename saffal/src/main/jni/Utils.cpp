@@ -8,11 +8,22 @@
 #include <linux/limits.h>
 #include <android/log.h>
 #include <vector>
+#include <string>
+#include <thread>
 
-#define LOGI(...) ((void)__android_log_print(ANDROID_LOG_INFO,"Utils NDK", __VA_ARGS__))
+
+#define LOGI(...) ((void)0)
 
 static std::vector<std::string> m_SAFPaths;
 static std::string g_currentWorkingDirectory;
+
+struct PathCache {
+	std::string raw;
+	std::string canonical;
+	bool inSAF;
+	bool valid = false;
+};
+static thread_local PathCache tls_cache;
 
 static char* (*original_getcwd)(char*, size_t) = nullptr;
 
@@ -32,67 +43,53 @@ static char* safe_getcwd(char* buf, size_t size) {
 	return nullptr;
 }
 
-#define IS_SLASH(s) (s == '/')
-static void ap_getparents(char *name)
-{
-	char *next;
-	int l, w, first_dot;
+static void ap_getparents(char *path) {
+	if (!path || !*path) return;
 
-	for(next = name; *next && (*next != '.'); next++) {}
-	l = w = first_dot = next - name;
+	char *src = path;
+	char *dst = path;
+	bool prevSlash = false;
 
-	while(name[l] != '\0')
-	{
-		if(name[l] == '.' && IS_SLASH(name[l + 1])
-		   && (l == 0 || IS_SLASH(name[l - 1])))
-			l += 2;
-		else
-			name[w++] = name[l++];
+
+	if (*src == '/') {
+		*dst++ = *src++;
+		prevSlash = true;
 	}
 
-	if(w == 1 && name[0] == '.')
-		w--;
-	else if(w > 1 && name[w - 1] == '.' && IS_SLASH(name[w - 2]))
-		w--;
-	name[w] = '\0';
-
-	l = first_dot;
-	while(name[l] != '\0')
-	{
-		if(name[l] == '.' && name[l + 1] == '.' && IS_SLASH(name[l + 2])
-		   && (l == 0 || IS_SLASH(name[l - 1])))
-		{
-			int m = l + 3, n;
-			l = l - 2;
-			if(l >= 0)
-			{
-				while(l >= 0 && !IS_SLASH(name[l]))
-					l--;
-				l++;
+	while (*src) {
+		if (*src == '/') {
+			if (!prevSlash) {
+				*dst++ = '/';
+				prevSlash = true;
 			}
-			else l = 0;
-			n = l;
-			while((name[n] = name[m])) (++n, ++m);
+			++src;
+		} else if (*src == '.' && (!src[1] || src[1] == '/')) {
+
+			++src;
+			if (*src == '/') ++src;
+		} else if (*src == '.' && src[1] == '.' && (!src[2] || src[2] == '/')) {
+
+			if (dst > path + 1) {
+				--dst;
+				while (dst > path && *(dst - 1) != '/') --dst;
+
+				if (dst == path && *dst == '/') ++dst;
+			}
+			src += 2;
+			if (*src == '/') ++src;
+			prevSlash = (dst > path && *(dst - 1) == '/');
+		} else {
+			*dst++ = *src++;
+			prevSlash = false;
 		}
-		else ++l;
 	}
 
-	if(l == 2 && name[0] == '.' && name[1] == '.')
-		name[0] = '\0';
-	else if(l > 2 && name[l - 1] == '.' && name[l - 2] == '.'
-	        && IS_SLASH(name[l - 3]))
-	{
-		l = l - 4;
-		if(l >= 0)
-		{
-			while(l >= 0 && !IS_SLASH(name[l]))
-				l--;
-			l++;
-		}
-		else l = 0;
-		name[l] = '\0';
+	if (dst > path + 1 && *(dst - 1) == '/') {
+		--dst;
 	}
+	*dst = '\0';
 }
+
 
 void clearSAFPaths()
 {
@@ -104,10 +101,23 @@ void addSAFPath(std::string SAFPath)
 	m_SAFPaths.push_back(SAFPath);
 }
 
-std::string getCanonicalPath(std::string path)
-{
-	if (!path.empty() && path[0] != '/')
-	{
+static bool isInSAF_internal(const std::string& path) {
+	for(const auto& safPath : m_SAFPaths) {
+		if(safPath.length() > 0 && path.compare(0, safPath.length(), safPath) == 0)
+			return true;
+	}
+	return false;
+}
+
+void resolvePath(const char* raw, std::string& outCanon, bool& outSaf) {
+	if (tls_cache.valid && tls_cache.raw == raw) {
+		outCanon = tls_cache.canonical;
+		outSaf   = tls_cache.inSAF;
+		return;
+	}
+
+	std::string path(raw);
+	if (!path.empty() && path[0] != '/') {
 		std::string cwd = getCurrentWorkingDirectory();
 		if (cwd.back() == '/')
 			path = cwd + path;
@@ -119,38 +129,43 @@ std::string getCanonicalPath(std::string path)
 	strncpy(pathC, path.c_str(), PATH_MAX);
 	pathC[PATH_MAX-1] = '\0';
 	ap_getparents(pathC);
-	return std::string(pathC);
+	outCanon = pathC;
+
+	outSaf = isInSAF_internal(outCanon);
+
+	tls_cache.raw = raw;
+	tls_cache.canonical = outCanon;
+	tls_cache.inSAF = outSaf;
+	tls_cache.valid = true;
 }
 
-bool isInSAF(std::string path)
-{
-	for(const auto& safPath : m_SAFPaths)
-	{
-		if(safPath.length() > 0 && path.rfind(safPath, 0) == 0)
-			return true;
-	}
-	return false;
+std::string getCanonicalPath(std::string path) {
+	std::string canon;
+	bool saf;
+	resolvePath(path.c_str(), canon, saf);
+	return canon;
 }
 
-std::string getCurrentWorkingDirectory()
-{
-	if (g_currentWorkingDirectory.empty())
-	{
+bool isInSAF(std::string path) {
+	std::string canon;
+	bool saf;
+	resolvePath(path.c_str(), canon, saf);
+	return saf;
+}
+
+std::string getCurrentWorkingDirectory() {
+	if (g_currentWorkingDirectory.empty()) {
 		char* cstr = safe_getcwd(nullptr, 0);
-		if (cstr)
-		{
+		if (cstr) {
 			g_currentWorkingDirectory = cstr;
 			free(cstr);
-		}
-		else
-		{
+		} else {
 			g_currentWorkingDirectory = "/";
 		}
 	}
 	return g_currentWorkingDirectory;
 }
 
-void setCurrentWorkingDirectory(const std::string &cwd)
-{
+void setCurrentWorkingDirectory(const std::string &cwd) {
 	g_currentWorkingDirectory = cwd;
 }

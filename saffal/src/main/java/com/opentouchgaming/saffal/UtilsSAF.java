@@ -22,14 +22,22 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class UtilsSAF {
     private static final String TAG = "UtilsSAF";
     private static Context appContext;
     private static int cacheNativeFs = 0;
-
     private static final List<TreeRoot> treeRoots = new ArrayList<>();
+    private static final Map<String, Boolean> safCache = new HashMap<>();
+    private static final Map<String, Boolean> rootPrefixCache = new HashMap<>();
+
+    private static void invalidateCaches() {
+        safCache.clear();
+        rootPrefixCache.clear();
+    }
 
     public static void setContext(@NonNull Context ctx, boolean cacheNativeFs) {
         appContext = ctx.getApplicationContext();
@@ -42,18 +50,13 @@ public class UtilsSAF {
     }
 
     public static ContentResolver getContentResolver() {
-        checkContext();
+        if (appContext == null)
+            throw new IllegalStateException("UtilsSAF.setContext() must be called first");
         return appContext.getContentResolver();
     }
 
-    private static void checkContext() {
-        if (appContext == null) {
-            throw new IllegalStateException("UtilsSAF.setContext() must be called first");
-        }
-    }
-
     public static boolean addTreeRootFromUri(@NonNull Uri treeUri) {
-        checkContext();
+        if (appContext == null) throw new IllegalStateException("setContext not called");
 
         getContentResolver().takePersistableUriPermission(treeUri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
@@ -65,9 +68,8 @@ public class UtilsSAF {
         }
 
         String rootPath = guessRootPath(documentId);
-        if (rootPath == null) {
+        if (rootPath == null)
             rootPath = "/saf/tree_" + Math.abs(treeUri.hashCode());
-        }
 
         TreeRoot root = new TreeRoot(treeUri, rootPath, documentId);
         addTreeRoot(root);
@@ -77,22 +79,32 @@ public class UtilsSAF {
     @Nullable
     private static String guessRootPath(String documentId) {
         if (TextUtils.isEmpty(documentId)) return null;
-        String[] parts = documentId.split(":", 2);
-        String volume = parts[0];
-        String path = parts.length > 1 ? parts[1] : "";
+
+        int colonIndex = documentId.indexOf(':');
+        String volume, path;
+        if (colonIndex < 0) {
+            volume = documentId;
+            path = "";
+        } else {
+            volume = documentId.substring(0, colonIndex);
+            path = documentId.substring(colonIndex + 1);
+        }
 
         if (volume.equalsIgnoreCase("primary")) {
             String base = Environment.getExternalStorageDirectory().getAbsolutePath();
             if (path.isEmpty()) return base;
-            if (path.startsWith("/")) path = path.substring(1);
+            if (path.charAt(0) == '/') path = path.substring(1);
             return base + "/" + path;
         }
-        else if (volume.matches("[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}")) {
+
+
+        if (volume.length() == 9 && volume.charAt(4) == '-') {
             String base = "/storage/" + volume;
             if (path.isEmpty()) return base;
-            if (path.startsWith("/")) path = path.substring(1);
+            if (path.charAt(0) == '/') path = path.substring(1);
             return base + "/" + path;
         }
+
         return null;
     }
 
@@ -105,16 +117,19 @@ public class UtilsSAF {
         root.documentRoot = documentRoot;
 
         treeRoots.add(root);
+        invalidateCaches();
         rebuildNativePaths();
     }
 
     public static void removeTreeRoot(@NonNull String rootPath) {
         treeRoots.removeIf(r -> r.rootPath.equals(rootPath));
+        invalidateCaches();
         rebuildNativePaths();
     }
 
     public static void clearTreeRoots() {
         treeRoots.clear();
+        invalidateCaches();
         rebuildNativePaths();
     }
 
@@ -138,11 +153,54 @@ public class UtilsSAF {
     @Nullable
     public static TreeRoot getTreeRootForPath(String path) {
         for (TreeRoot root : treeRoots) {
-            if (path.startsWith(root.rootPath)) {
+            if (path.startsWith(root.rootPath))
                 return root;
-            }
         }
         return null;
+    }
+
+    public static boolean isInSAFRoot(String path) {
+        if (treeRoots.isEmpty()) return false;
+
+        Boolean cached = safCache.get(path);
+        if (cached != null) return cached;
+
+        for (TreeRoot root : treeRoots) {
+            if (path.startsWith(root.rootPath)) {
+                safCache.put(path, Boolean.TRUE);
+                return true;
+            }
+        }
+
+        safCache.put(path, Boolean.FALSE);
+        return false;
+    }
+
+    public static boolean isRootOfSAFRoot(String path) {
+        if (treeRoots.isEmpty()) return false;
+
+        Boolean cached = rootPrefixCache.get(path);
+        if (cached != null) return cached;
+
+        String[] inputParts = path.split("/");
+        for (TreeRoot root : treeRoots) {
+            String[] rootParts = root.rootPath.split("/");
+            if (inputParts.length > rootParts.length) continue;
+            boolean match = true;
+            for (int i = 0; i < inputParts.length; i++) {
+                if (!inputParts[i].equals(rootParts[i])) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                rootPrefixCache.put(path, Boolean.TRUE);
+                return true;
+            }
+        }
+
+        rootPrefixCache.put(path, Boolean.FALSE);
+        return false;
     }
 
     @Nullable
@@ -154,11 +212,10 @@ public class UtilsSAF {
     }
 
     public static void saveTreeRoots() {
-        checkContext();
+        if (appContext == null) return;
         SharedPreferences prefs = appContext.getSharedPreferences("utilsSAF", Context.MODE_PRIVATE);
         SharedPreferences.Editor edit = prefs.edit();
         edit.clear();
-
         int count = 0;
         for (TreeRoot root : treeRoots) {
             if (root.uri != null && root.rootPath != null && root.rootDocumentId != null) {
@@ -173,12 +230,12 @@ public class UtilsSAF {
     }
 
     public static boolean loadTreeRoots() {
-        checkContext();
+        if (appContext == null) return false;
         SharedPreferences prefs = appContext.getSharedPreferences("utilsSAF", Context.MODE_PRIVATE);
         int count = prefs.getInt("count", 0);
-
         if (count > 0) {
             treeRoots.clear();
+            invalidateCaches();
             for (int i = 0; i < count; i++) {
                 String uriStr = prefs.getString("uri_" + i, null);
                 String rootPath = prefs.getString("rootPath_" + i, null);
@@ -203,28 +260,6 @@ public class UtilsSAF {
         return false;
     }
 
-    public static boolean isInSAFRoot(String path) {
-        return getTreeRootForPath(path) != null;
-    }
-
-    public static boolean isRootOfSAFRoot(String path) {
-        if (treeRoots.isEmpty()) return false;
-        String[] inputParts = path.split("/");
-        for (TreeRoot root : treeRoots) {
-            String[] rootParts = root.rootPath.split("/");
-            if (inputParts.length > rootParts.length) continue;
-            boolean match = true;
-            for (int i = 0; i < inputParts.length; i++) {
-                if (!inputParts[i].equals(rootParts[i])) {
-                    match = false;
-                    break;
-                }
-            }
-            if (match) return true;
-        }
-        return false;
-    }
-
     @Nullable
     public static String getRealPathFromUri(@NonNull Uri uri) {
         if (appContext == null) return null;
@@ -232,20 +267,20 @@ public class UtilsSAF {
         try {
             String docId = DocumentsContract.getDocumentId(uri);
             if (docId != null) {
-                if (docId.startsWith("primary:")) {
-                    String relative = docId.substring("primary:".length());
+                int colonIdx = docId.indexOf(':');
+                if (colonIdx > 0) {
+                    String vol = docId.substring(0, colonIdx);
+                    String relative = docId.substring(colonIdx + 1);
                     if (relative.startsWith("/")) relative = relative.substring(1);
-                    return Environment.getExternalStorageDirectory().getAbsolutePath() + "/" + relative;
-                }
-                if (docId.matches("[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}:.*")) {
-                    int colon = docId.indexOf(':');
-                    String vol = docId.substring(0, colon);
-                    String rel = docId.substring(colon + 1);
-                    if (rel.startsWith("/")) rel = rel.substring(1);
-                    return "/storage/" + vol + "/" + rel;
+
+                    if (vol.equalsIgnoreCase("primary"))
+                        return Environment.getExternalStorageDirectory().getAbsolutePath() + "/" + relative;
+                    if (vol.length() == 9 && vol.charAt(4) == '-')
+                        return "/storage/" + vol + "/" + relative;
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
         try {
             ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(uri, "r");
@@ -254,25 +289,24 @@ public class UtilsSAF {
                 pfd.close();
                 if (!TextUtils.isEmpty(rawPath)) {
                     String normalized = normalizeInternalPath(rawPath);
-                    if (normalized != null) return normalized;
-                    return rawPath;
+                    return normalized != null ? normalized : rawPath;
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
         return null;
     }
 
     private static String normalizeInternalPath(String path) {
-        if (path.startsWith("/mnt/user/0/emulated/")) {
+        if (path.startsWith("/mnt/user/0/emulated/"))
             return "/storage/emulated/" + path.substring("/mnt/user/0/emulated/".length());
-        }
         if (path.startsWith("/mnt/media_rw/")) {
             String rest = path.substring("/mnt/media_rw/".length());
-            int slashIndex = rest.indexOf('/');
-            if (slashIndex > 0) {
-                String vol = rest.substring(0, slashIndex);
-                String after = rest.substring(slashIndex);
+            int slash = rest.indexOf('/');
+            if (slash > 0) {
+                String vol = rest.substring(0, slash);
+                String after = rest.substring(slash);
                 return "/storage/" + vol + after;
             } else {
                 return "/storage/" + rest;
@@ -312,9 +346,8 @@ public class UtilsSAF {
     }
 
     private static String getDocumentPath(String fullPath, TreeRoot root) {
-        if (fullPath.length() > root.rootPath.length()) {
-            return fullPath.substring(root.rootPath.length() + 1); // убираем ведущий /
-        }
+        if (fullPath.length() > root.rootPath.length())
+            return fullPath.substring(root.rootPath.length() + 1);
         return "";
     }
 
@@ -354,9 +387,5 @@ public class UtilsSAF {
             this.rootPath = rootPath;
             this.rootDocumentId = rootDocumentId;
         }
-    }
-
-    private static void DBG(String str) {
-        Log.d(TAG, str);
     }
 }

@@ -9,4 +9,4 @@ int FileJNI_exists(const char * path);
 int FileJNI_delete(const char * path);
 int FileJNI_rename(const char * oldFilename, const char * newFilename);
 
-std::vector<std::string> FIleJNI_opendir(const char * path);
+std::vector<std::string> FileJNI_opendir(const char * path);

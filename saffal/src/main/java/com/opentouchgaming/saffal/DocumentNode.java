@@ -6,13 +6,18 @@ import android.os.Build;
 import android.provider.DocumentsContract;
 import android.util.Log;
 
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 
 import java.io.FileNotFoundException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class DocumentNode {
     static final String TAG = "DocumentNode";
@@ -20,19 +25,17 @@ public class DocumentNode {
 
     public String name;
     public String documentId;
-    public boolean exists;
     public boolean isDirectory;
     public long size;
     public long modifiedDate;
     public DocumentNode parent;
     public Uri treeUri;
-
-    private List<DocumentNode> children;
+    private Map<String, DocumentNode> childrenMap;
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
-    public static DocumentNode findDocumentNode(DocumentNode rootNode, String documentPath) {
-        if (documentPath == null || rootNode == null) return null;
-        if (!rootNode.isDirectory) return null;
+    @Nullable
+    public static DocumentNode findDocumentNode(@NonNull DocumentNode rootNode, @Nullable String documentPath) {
+        if (documentPath == null || !rootNode.isDirectory) return null;
 
         String[] parts = documentPath.split("/", -1);
         DocumentNode current = rootNode;
@@ -47,10 +50,10 @@ public class DocumentNode {
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
-    public static DocumentNode createAllNodes(DocumentNode rootNode, String documentPath)
+    @Nullable
+    public static DocumentNode createAllNodes(@NonNull DocumentNode rootNode, @Nullable String documentPath)
             throws FileNotFoundException {
-        DBG("createAllNodes: " + documentPath);
-        if (documentPath == null || rootNode == null || !rootNode.isDirectory) return null;
+        if (documentPath == null || !rootNode.isDirectory) return null;
 
         String[] parts = documentPath.split("/", -1);
         DocumentNode current = rootNode;
@@ -58,16 +61,13 @@ public class DocumentNode {
         for (String part : parts) {
             if (part.isEmpty()) continue;
             if (current == null || !current.isDirectory) {
-                DBG("createAllNodes: current not a directory");
+                Log.w(TAG, "createAllNodes: current not a directory");
                 return null;
             }
             DocumentNode next = current.findChild(part);
             if (next == null) {
                 next = current.createChild(true, part);
-                if (next == null) {
-                    DBG("createAllNodes: failed to create " + part);
-                    return null;
-                }
+                if (next == null) return null;
             }
             current = next;
         }
@@ -75,46 +75,51 @@ public class DocumentNode {
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
+    @Nullable
     public synchronized DocumentNode findChild(String name) {
         if (!isDirectory) return null;
-        if (children == null) {
-            loadChildren();
-        }
-        if (children == null) return null;
-
-        for (DocumentNode child : children) {
-            if (child.name.equals(name)) return child;
-        }
-        for (DocumentNode child : children) {
-            if (child.name.equalsIgnoreCase(name)) return child;
+        ensureChildrenLoaded();
+        if (childrenMap == null || childrenMap.isEmpty()) return null;
+        DocumentNode exact = childrenMap.get(name);
+        if (exact != null) return exact;
+        for (Map.Entry<String, DocumentNode> entry : childrenMap.entrySet()) {
+            if (entry.getKey().equalsIgnoreCase(name)) {
+                return entry.getValue();
+            }
         }
         return null;
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
+    @NonNull
     public synchronized List<DocumentNode> getChildren() {
-        if (isDirectory && children == null) {
+        if (!isDirectory) return Collections.emptyList();
+        ensureChildrenLoaded();
+        if (childrenMap == null || childrenMap.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return new ArrayList<>(childrenMap.values());
+    }
+
+    private void ensureChildrenLoaded() {
+        if (!isDirectory) return;
+        if (childrenMap == null) {
             loadChildren();
         }
-        if (children == null) return new ArrayList<>();
-        return new ArrayList<>(children);
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     private void loadChildren() {
-        if (!isDirectory) return;
-        children = new ArrayList<>();
+        childrenMap = new HashMap<>();
         Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId);
-        Cursor cursor = null;
-        try {
-            cursor = UtilsSAF.getContentResolver().query(childrenUri,
-                    new String[]{
-                            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                            DocumentsContract.Document.COLUMN_MIME_TYPE,
-                            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                            DocumentsContract.Document.COLUMN_LAST_MODIFIED,
-                            DocumentsContract.Document.COLUMN_SIZE
-                    }, null, null, null);
+        try (Cursor cursor = UtilsSAF.getContentResolver().query(childrenUri,
+                new String[]{
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                        DocumentsContract.Document.COLUMN_MIME_TYPE,
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                        DocumentsContract.Document.COLUMN_SIZE
+                }, null, null, null)) {
             while (cursor != null && cursor.moveToNext()) {
                 DocumentNode node = new DocumentNode();
                 node.name = cursor.getString(0);
@@ -125,46 +130,37 @@ public class DocumentNode {
                 node.size = cursor.getLong(4);
                 node.treeUri = this.treeUri;
                 node.parent = this;
-                node.exists = true;
-                children.add(node);
+                childrenMap.put(node.name, node);
             }
         } catch (Exception e) {
             Log.e(TAG, "loadChildren failed: " + e.getMessage());
-            children = null;
-        } finally {
-            if (cursor != null) {
-                try { cursor.close(); } catch (Exception ignored) {}
-            }
+            childrenMap = null;
         }
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
+    @Nullable
     public synchronized DocumentNode createChild(boolean directory, String name) throws FileNotFoundException {
-        DBG("createChild: " + name + " dir=" + directory);
         if (!isDirectory) {
             throw new FileNotFoundException("Parent is not a directory");
         }
-        if (findChild(name) != null) {
-            DBG("createChild: already exists, returning existing");
-            return findChild(name);
+
+        DocumentNode existing = findChild(name);
+        if (existing != null) {
+            return existing;
         }
 
         Uri parentUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId);
-        try {
-            String mime = directory ? DocumentsContract.Document.MIME_TYPE_DIR : DEFAULT_MIME_TYPE;
-            DocumentsContract.createDocument(UtilsSAF.getContentResolver(), parentUri, mime, name);
-        } catch (Exception e) {
-            Log.e(TAG, "createChild failed: " + e.getMessage());
-            throw new FileNotFoundException("Cannot create " + name);
-        }
+        String mime = directory ? DocumentsContract.Document.MIME_TYPE_DIR : DEFAULT_MIME_TYPE;
+        DocumentsContract.createDocument(UtilsSAF.getContentResolver(), parentUri, mime, name);
 
-        children = null;
+
+        clearCache();
         return findChild(name);
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public synchronized boolean deleteChild(String name) throws FileNotFoundException {
-        DBG("deleteChild: " + name);
         if (!isDirectory) {
             throw new FileNotFoundException("Not a directory");
         }
@@ -174,20 +170,15 @@ public class DocumentNode {
         }
 
         Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, child.documentId);
-        try {
-            boolean result = DocumentsContract.deleteDocument(UtilsSAF.getContentResolver(), docUri);
-            if (result) {
-                children = null;
-            }
-            return result;
-        } catch (Exception e) {
-            Log.e(TAG, "deleteChild failed: " + e.getMessage());
-            return false;
+        boolean result = DocumentsContract.deleteDocument(UtilsSAF.getContentResolver(), docUri);
+        if (result) {
+            clearCache();
         }
+        return result;
     }
 
     public synchronized void clearCache() {
-        children = null;
+        childrenMap = null;
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)

@@ -6,9 +6,11 @@ import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract;
 import android.util.Log;
+
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -16,12 +18,14 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.List;
 
 public class FileSAF extends File {
+
     private final String TAG = "FileSAF";
     private final String fullPath;
     private final boolean isRealFile;
-    public boolean isDirectory;
+    private boolean isDirectory;
     private DocumentNode documentNode;
     private ParcelFileDescriptor parcelFileDescriptor;
     private int fd = -1;
@@ -54,6 +58,7 @@ public class FileSAF extends File {
         this.isRealFile = !UtilsSAF.isInSAFRoot(fullPath);
     }
 
+
     @Override
     public String getPath() {
         return fullPath;
@@ -80,8 +85,7 @@ public class FileSAF extends File {
     @Override
     public FileSAF getParentFile() {
         String p = getParent();
-        if (p.isEmpty()) return null;
-        return new FileSAF(p, true);
+        return p.isEmpty() ? null : new FileSAF(p, true);
     }
 
     @NonNull
@@ -99,8 +103,7 @@ public class FileSAF extends File {
     public boolean equals(Object o) {
         if (this == o) return true;
         if (!(o instanceof FileSAF)) return false;
-        FileSAF fileSAF = (FileSAF) o;
-        return fullPath.equals(fileSAF.fullPath);
+        return fullPath.equals(((FileSAF) o).fullPath);
     }
 
     @Override
@@ -112,19 +115,20 @@ public class FileSAF extends File {
         return isRealFile;
     }
 
+
     @Override
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public boolean exists() {
         if (isRealFile) {
             if (super.exists()) return true;
             try (FileInputStream fis = new FileInputStream(this)) {
-                fis.close();
                 return true;
             } catch (IOException ignored) {
+                return false;
             }
-            return false;
         } else {
-            updateDocumentNode(true);
+
+            updateDocumentNode(false);
             return documentNode != null;
         }
     }
@@ -132,148 +136,104 @@ public class FileSAF extends File {
     @Override
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public boolean isFile() {
-        if (isRealFile) {
-            return super.isFile();
-        } else {
-            updateDocumentNode(false);
-            return documentNode != null && !documentNode.isDirectory;
-        }
+        if (isRealFile) return super.isFile();
+        updateDocumentNode(false);
+        return documentNode != null && !documentNode.isDirectory;
     }
 
     @Override
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public boolean isDirectory() {
-        if (isRealFile) {
-            return super.isDirectory();
-        } else {
-            updateDocumentNode(false);
-            return documentNode != null && documentNode.isDirectory;
-        }
+        if (isRealFile) return super.isDirectory();
+        updateDocumentNode(false);
+        return documentNode != null && documentNode.isDirectory;
     }
 
     @Override
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public boolean canRead() {
-        if (isRealFile) {
-            return super.canRead();
-        } else {
-            return exists();
-        }
+        return exists();
     }
 
     @Override
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public boolean canWrite() {
-        if (isRealFile) {
-            return super.canWrite();
-        } else {
-            updateDocumentNode(true);
-            if (documentNode != null) {
-                Uri docUri = DocumentsContract.buildDocumentUriUsingTree(
-                        documentNode.treeUri, documentNode.documentId);
-                try (Cursor cursor = UtilsSAF.getContentResolver().query(
-                        docUri,
-                        new String[]{DocumentsContract.Document.COLUMN_FLAGS},
-                        null, null, null)) {
-                    if (cursor != null && cursor.moveToFirst()) {
-                        int flags = cursor.getInt(0);
-                        return (flags & DocumentsContract.Document.FLAG_SUPPORTS_WRITE) != 0;
-                    }
-                } catch (Exception e) {
-                    Log.e(TAG, "canWrite query failed", e);
-                }
-            }
-            return false;
-        }
+        if (isRealFile) return super.canWrite();
+
+        return exists();
     }
 
     @Override
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public long length() {
-        if (isRealFile) {
-            return super.length();
-        } else {
-            updateDocumentNode(false);
-            return documentNode != null ? documentNode.size : 0L;
-        }
+        if (isRealFile) return super.length();
+        updateDocumentNode(false);
+        return documentNode != null ? documentNode.size : 0L;
     }
 
     @Override
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public long lastModified() {
-        if (isRealFile) {
-            return super.lastModified();
-        } else {
-            updateDocumentNode(false);
-            return documentNode != null ? documentNode.modifiedDate : 0L;
-        }
+        if (isRealFile) return super.lastModified();
+        updateDocumentNode(false);
+        return documentNode != null ? documentNode.modifiedDate : 0L;
     }
+
 
     @Override
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public boolean createNewFile() throws IOException {
-        if (isRealFile) {
-            return super.createNewFile();
+        if (isRealFile) return super.createNewFile();
+        DocumentNode parentNode = UtilsSAF.findDocumentNode(getParent());
+        if (parentNode != null && parentNode.isDirectory) {
+            return parentNode.createChild(false, getName()) != null;
         } else {
-            DocumentNode parentNode = UtilsSAF.findDocumentNode(getParent());
-            if (parentNode != null && parentNode.isDirectory) {
-                return parentNode.createChild(false, getName()) != null;
-            } else {
-                throw new IOException("Parent directory is invalid or not found in SAF");
-            }
+            throw new IOException("Parent directory is invalid or not found in SAF");
         }
     }
 
     @Override
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public boolean mkdirs() {
-        if (isRealFile) {
-            return super.mkdirs();
-        } else {
-            updateDocumentNode(true);
+        if (isRealFile) return super.mkdirs();
+        updateDocumentNode(false);
+        if (documentNode != null) return true;
+
+        UtilsSAF.TreeRoot root = UtilsSAF.getTreeRootForPath(fullPath);
+        if (root == null) return false;
+
+        try {
+            String relativePath = UtilsSAF.getDocumentPath(fullPath);
+            documentNode = DocumentNode.createAllNodes(root.documentRoot, relativePath);
             if (documentNode != null) {
+                isDirectory = documentNode.isDirectory;
                 return true;
             }
-
-            UtilsSAF.TreeRoot root = UtilsSAF.getTreeRootForPath(fullPath);
-            if (root == null) return false;
-
-            try {
-                String relativePath = UtilsSAF.getDocumentPath(fullPath);
-                documentNode = DocumentNode.createAllNodes(root.documentRoot, relativePath);
-                if (documentNode != null) {
-                    isDirectory = documentNode.isDirectory;
-                    return true;
-                }
-            } catch (FileNotFoundException e) {
-                Log.e(TAG, "mkdirs failed: " + e.getMessage());
-            }
-            return false;
+        } catch (FileNotFoundException e) {
+            Log.e(TAG, "mkdirs failed: " + e.getMessage());
         }
+        return false;
     }
 
     @Override
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public boolean delete() {
-        if (isRealFile) {
-            return super.delete();
-        } else {
-            DocumentNode parentNode = UtilsSAF.findDocumentNode(getParent());
-            if (parentNode != null && parentNode.isDirectory) {
-                try {
-                    boolean ok = parentNode.deleteChild(getName());
-                    if (ok) {
-                        parentNode.clearCache();
-                        documentNode = null;
-                    }
-                    return ok;
-                } catch (FileNotFoundException e) {
-                    Log.e(TAG, "delete: " + e.getMessage());
-                    return false;
+        if (isRealFile) return super.delete();
+        DocumentNode parentNode = UtilsSAF.findDocumentNode(getParent());
+        if (parentNode != null && parentNode.isDirectory) {
+            try {
+                boolean ok = parentNode.deleteChild(getName());
+                if (ok) {
+                    parentNode.clearCache();
+                    documentNode = null;
                 }
+                return ok;
+            } catch (FileNotFoundException e) {
+                Log.e(TAG, "delete: " + e.getMessage());
+                return false;
             }
-            return false;
         }
+        return false;
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
@@ -281,17 +241,16 @@ public class FileSAF extends File {
         if (isRealFile) {
             File dest = new File(getParent(), newName);
             return super.renameTo(dest);
-        } else {
-            updateDocumentNode(true);
-            if (documentNode != null) {
-                UtilsSAF.renameDocument(documentNode.documentId, documentNode.treeUri, newName);
-                DocumentNode parentNode = UtilsSAF.findDocumentNode(getParent());
-                if (parentNode != null) parentNode.clearCache();
-                documentNode = null;
-                return true;
-            }
-            return false;
         }
+        updateDocumentNode(false);
+        if (documentNode != null) {
+            UtilsSAF.renameDocument(documentNode.documentId, documentNode.treeUri, newName);
+            DocumentNode parentNode = UtilsSAF.findDocumentNode(getParent());
+            if (parentNode != null) parentNode.clearCache();
+            documentNode = null;
+            return true;
+        }
+        return false;
     }
 
     @Override
@@ -300,9 +259,7 @@ public class FileSAF extends File {
         FileSAF[] files = listFiles();
         if (files == null) return null;
         String[] names = new String[files.length];
-        for (int i = 0; i < files.length; i++) {
-            names[i] = files[i].getName();
-        }
+        for (int i = 0; i < files.length; i++) names[i] = files[i].getName();
         return names;
     }
 
@@ -318,14 +275,13 @@ public class FileSAF extends File {
             }
             return result;
         } else {
-            updateDocumentNode(true);
+            updateDocumentNode(false);
             if (documentNode != null && documentNode.isDirectory) {
-                var children = documentNode.getChildren();
+                List<DocumentNode> children = documentNode.getChildren();
                 FileSAF[] result = new FileSAF[children.size()];
                 for (int i = 0; i < children.size(); i++) {
                     DocumentNode child = children.get(i);
-                    String childPath = fullPath + "/" + child.name;
-                    result[i] = new FileSAF(childPath, true);
+                    result[i] = new FileSAF(fullPath + "/" + child.name, true);
                 }
                 return result;
             }
@@ -335,28 +291,18 @@ public class FileSAF extends File {
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public InputStream getInputStream() throws FileNotFoundException {
-        if (isRealFile) {
-            return new FileInputStream(this);
-        } else {
-            updateDocumentNode(true);
-            if (documentNode != null) {
-                return documentNode.getInputStream();
-            }
-            throw new FileNotFoundException(fullPath);
-        }
+        if (isRealFile) return new FileInputStream(this);
+        updateDocumentNode(false);
+        if (documentNode != null) return documentNode.getInputStream();
+        throw new FileNotFoundException(fullPath);
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public OutputStream getOutputStream() throws FileNotFoundException {
-        if (isRealFile) {
-            return new FileOutputStream(this);
-        } else {
-            updateDocumentNode(true);
-            if (documentNode != null) {
-                return documentNode.getOutputStream();
-            }
-            throw new FileNotFoundException(fullPath);
-        }
+        if (isRealFile) return new FileOutputStream(this);
+        updateDocumentNode(false);
+        if (documentNode != null) return documentNode.getOutputStream();
+        throw new FileNotFoundException(fullPath);
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
@@ -365,18 +311,17 @@ public class FileSAF extends File {
 
         if (isRealFile) {
             try {
-                ParcelFileDescriptor pfd = ParcelFileDescriptor.open(
+                parcelFileDescriptor = ParcelFileDescriptor.open(
                         new File(fullPath),
                         write ? ParcelFileDescriptor.MODE_READ_WRITE : ParcelFileDescriptor.MODE_READ_ONLY);
-                parcelFileDescriptor = pfd;
-                fd = detach ? pfd.detachFd() : pfd.getFd();
+                fd = detach ? parcelFileDescriptor.detachFd() : parcelFileDescriptor.getFd();
                 return fd;
             } catch (FileNotFoundException e) {
                 Log.e(TAG, "getFd real file not found: " + e.getMessage());
                 return -1;
             }
         } else {
-            updateDocumentNode(true);
+            updateDocumentNode(false);
             if (documentNode != null) {
                 try {
                     parcelFileDescriptor = UtilsSAF.getParcelDescriptor(
@@ -406,27 +351,18 @@ public class FileSAF extends File {
     @Nullable
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public File getRealFile() {
-        if (isRealFile) {
-            return new File(fullPath);
-        }
-
+        if (isRealFile) return new File(fullPath);
         if (!exists()) return null;
-
         int tmpFd = getFd(false, false);
         if (tmpFd < 0) return null;
-
         String realPath = UtilsSAF.getFdPath(tmpFd);
         closeCurrentFd();
-
-        if (realPath != null && !realPath.isEmpty()) {
-            return new File(realPath);
-        }
-        return null;
+        return (realPath != null && !realPath.isEmpty()) ? new File(realPath) : null;
     }
 
     public void clearCache() {
         if (!isRealFile) {
-            updateDocumentNode(true);
+            updateDocumentNode(false);
             if (documentNode != null && documentNode.isDirectory) {
                 documentNode.clearCache();
             }
@@ -446,10 +382,8 @@ public class FileSAF extends File {
 
     private String canonicalize(String path) {
         try {
-            File f = new File(path);
-            return f.getCanonicalPath();
+            return new File(path).getCanonicalPath();
         } catch (IOException e) {
-            Log.w(TAG, "Cannot canonicalize path: " + path + ", using absolute path");
             return new File(path).getAbsolutePath();
         }
     }

@@ -1,196 +1,146 @@
-
 #include "FileCache.h"
 #include "FileJNI.h"
 
 #include <sys/types.h>
 #include <unistd.h>
-
-#include <map>
-#include <string>
-#include <vector>
 #include <pthread.h>
+
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <list>
+#include <utility>
 
 #include <android/log.h>
 
-static const int MAXIMUM_CACHED_FILES = 256;
+static const size_t MAXIMUM_CACHED_FILES = 256;
 
-#if 0
-#define LOGI(...) ((void)__android_log_print(ANDROID_LOG_INFO,"FileCache NDK", __VA_ARGS__))
-#else
-#define LOGI(...)
-#endif
-
-#define LOGIALWAYS(...) ((void)__android_log_print(ANDROID_LOG_INFO,"FileCache NDK", __VA_ARGS__))
+#define LOGI(...) ((void)0)
+#define LOGIALWAYS(...) __android_log_print(ANDROID_LOG_INFO, "FileCache NDK", __VA_ARGS__)
 
 static pthread_mutex_t lock;
+#define MUTEX_LOCK   pthread_mutex_lock(&lock)
+#define MUTEX_UNLOCK pthread_mutex_unlock(&lock)
 
-#if 1
-#define MUTEX_LOCK  pthread_mutex_lock(&lock);
-#define MUTEX_UNLOCK  pthread_mutex_unlock(&lock);
-#else
-#define MUTEX_LOCK
-#define MUTEX_UNLOCK
-#endif
+extern "C" void* loadRealFunc(const char * name);
+static std::unordered_map<std::string, int> cacheFree;
+static std::unordered_map<int, std::string> cacheActive;
+static std::unordered_set<std::string> userFileKeys;
+static std::list<std::string> lruList;
+static std::unordered_map<std::string, std::list<std::string>::iterator> lruMap;
 
-extern "C" void* loadRealFunc(const char * name); // In FileSAF.cpp
-
-static std::map<int, std::string> cacheActive;
-static std::map<std::string, int> cacheFree;
-
-void FileCache_init()
-{
-	pthread_mutex_init(&lock, NULL);
+void FileCache_init() {
+	pthread_mutex_init(&lock, nullptr);
 }
 
-extern "C"  void clearUserFilesFromCache(int mutextLock)
-{
-    if(mutextLock) {
-        MUTEX_LOCK
-    }
-    for (auto it = cacheFree.begin(); it != cacheFree.end();)
-    {
-        if (it->first.find("user_files") != std::string::npos)
-        {
-            LOGIALWAYS("Removing user_file from cache: %s", it->first.c_str());
+extern "C" void clearUserFilesFromCache(int mutextLock) {
+	if (mutextLock) MUTEX_LOCK;
 
-            static int (*close_real)(int) = NULL;
+	static int (*close_real)(int) = nullptr;
+	if (close_real == nullptr)
+		close_real = (int (*)(int))loadRealFunc("close");
+	auto it = userFileKeys.begin();
+	while (it != userFileKeys.end()) {
+		auto cacheIt = cacheFree.find(*it);
+		if (cacheIt != cacheFree.end()) {
+			int fd = cacheIt->second;
+			close_real(fd);
 
-            if(close_real == NULL)
-                close_real = (int(*)(int))loadRealFunc("close");
-
-            close_real(it->second);
-
-            it = cacheFree.erase(it);
-        } else {
-            ++it;
-        }
-    }
-    if(mutextLock) {
-        MUTEX_UNLOCK
-    }
-}
-
-int FileCache_getFd(const char * filename, const char * mode, int (*openFunc)(const char * filename, const char * mode))
-{
-	MUTEX_LOCK
-
-	int fd = 0;
-
-	static char fileTag[256]; // Need to include the filename AND the mode, can not mix modes
-	snprintf(fileTag, 256, "%s - %s", filename, mode);
-
-	// Check if writing, if so DO NOT CACHE, also do not cache in user_files
-	//if(strchr(mode, 'w') || strchr(mode, 'a') || strstr(filename, "user_files"))
-    if(strchr(mode, 'w') || strchr(mode, 'a'))
-	{
-        clearUserFilesFromCache(0);
-		fd = openFunc(filename, mode);
-	}
-	else
-	{
-		// Check if file is in our cache
-		if(cacheFree.find(fileTag) == cacheFree.end())       // not found
-		{
-			//LOGI("FileCache_getFd NOT FOUND");
-			fd = openFunc(filename, mode);
-
-			if(fd > 0)
-			{
-				LOGI("FileCache_getFd %s(%s) NOT FOUND, new fd = %d", filename, mode, fd);
+			auto lruIt = lruMap.find(*it);
+			if (lruIt != lruMap.end()) {
+				lruList.erase(lruIt->second);
+				lruMap.erase(lruIt);
 			}
+			cacheFree.erase(cacheIt);
 		}
-		else  // found
-		{
-			// Get cached fd
-			fd = cacheFree[fileTag];
-
-			//Remove from free cache
-			cacheFree.erase(fileTag);
-
-			LOGI("FileCache_getFd %s(%s) FOUND, fd = %d", filename, mode, fd);
-
-			// Reset the fd position
-			lseek(fd, 0, SEEK_SET);
-		}
-
-		// FD should always be unique, so map works
-		if(fd > 0)
-		{
-			cacheActive[fd] = fileTag;
-		}
+		it = userFileKeys.erase(it);
 	}
 
-	MUTEX_UNLOCK
+	if (mutextLock) MUTEX_UNLOCK;
+}
 
+int FileCache_getFd(const char * filename, const char * mode,
+                    int (*openFunc)(const char * filename, const char * mode)) {
+	MUTEX_LOCK;
+	std::string fileTag = std::string(filename) + " - " + mode;
+	int fd = 0;
+	if (strchr(mode, 'w') || strchr(mode, 'a')) {
+		clearUserFilesFromCache(0);
+		fd = openFunc(filename, mode);
+		MUTEX_UNLOCK;
+		return fd;
+	}
+	auto freeIt = cacheFree.find(fileTag);
+	if (freeIt == cacheFree.end()) {
+		fd = openFunc(filename, mode);
+		if (fd <= 0) {
+			MUTEX_UNLOCK;
+			return fd;
+		}
+	} else {
+		fd = freeIt->second;
+		cacheFree.erase(freeIt);
+		auto lruIt = lruMap.find(fileTag);
+		if (lruIt != lruMap.end()) {
+			lruList.erase(lruIt->second);
+			lruMap.erase(lruIt);
+		}
+		lseek(fd, 0, SEEK_SET);
+	}
+	cacheActive[fd] = fileTag;
+	MUTEX_UNLOCK;
 	return fd;
 }
 
-
-static void closeFd(int fd)
-{
-	MUTEX_LOCK
-
-	if(cacheActive.find(fd) == cacheActive.end())      // not found
-	{
-		LOGI("FileCache_closeFile NOT FOUND");
+static void closeFd(int fd) {
+	MUTEX_LOCK;
+	auto activeIt = cacheActive.find(fd);
+	if (activeIt == cacheActive.end()) {
+		MUTEX_UNLOCK;
+		return;
 	}
-	else
-	{
-		LOGI("FileCache_closeFile FOUND  %s", cacheActive[fd].c_str());
-
-#if 1
-
-		// If we haven't already got a cached of this file, add it now
-		if(cacheFree.find(cacheActive[fd]) == cacheFree.end())
-		{
-			// Free a file when over the cached limit
-			if(cacheFree.size() > MAXIMUM_CACHED_FILES)
-			{
-				// NOTE: This essentially take a random file from the cache, whatever happens to be sorted to the front.
-				// Better method would be to have them sorted in last used in another list
-				std::pair<std::string, int> firstEntry = *cacheFree.begin();
-				LOGI("FileCache_closeFile Removing from cache: %s, fd = %d", firstEntry.first.c_str(), firstEntry.second);
-
-				static int (*close_real)(int) = NULL;
-
-				if(close_real == NULL)
-					close_real = (int(*)(int))loadRealFunc("close");
-
-				// Close the fd
-				close_real(firstEntry.second);
-
-				// Remove
-				cacheFree.erase(firstEntry.first);
+	const std::string & key = activeIt->second;
+	if (cacheFree.size() >= MAXIMUM_CACHED_FILES) {
+		if (!lruList.empty()) {
+			const std::string & oldest = lruList.front();
+			auto freeIt = cacheFree.find(oldest);
+			if (freeIt != cacheFree.end()) {
+				static int (*close_real)(int) = nullptr;
+				if (close_real == nullptr)
+					close_real = (int (*)(int))loadRealFunc("close");
+				close_real(freeIt->second);
+				cacheFree.erase(freeIt);
+				userFileKeys.erase(oldest);
 			}
-
-			// Make a copy of the FD so the one held in FILE can be close
-			int fdCopy = dup(fd);
-
-			// Save new fd to the free cache
-			LOGI("FileCache_closeFile CACHEING %d, cache size = %d", fdCopy, cacheFree.size());
-
-			cacheFree[cacheActive[fd]] = fdCopy;
+			lruMap.erase(oldest);
+			lruList.pop_front();
 		}
-
-#endif
-		// Remove the old fd from the current active cache
-		cacheActive.erase(fd);
+	}
+	int fdCopy = dup(fd);
+	if (fdCopy == -1) {
+		MUTEX_UNLOCK;
+		return;
+	}
+	cacheFree[key] = fdCopy;
+	if (key.find("user_files") != std::string::npos) {
+		userFileKeys.insert(key);
 	}
 
-	MUTEX_UNLOCK
+	lruList.push_back(key);
+	auto it = lruList.end(); --it;
+	lruMap[key] = it;
+	cacheActive.erase(activeIt);
+	MUTEX_UNLOCK;
 }
 
-int FileCache_closeFd(int fd)
-{
+int FileCache_closeFd(int fd) {
 	closeFd(fd);
 	return 0;
 }
 
-int FileCache_closeFile(FILE * file)
-{
+int FileCache_closeFile(FILE * file) {
+	if (!file) return 0;
 	int fd = fileno(file);
 	closeFd(fd);
 	return 0;
 }
-
-
