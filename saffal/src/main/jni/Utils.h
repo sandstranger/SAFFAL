@@ -1,22 +1,16 @@
-#include <string>
-#include <utility>
+#ifndef UTILS_H
+#define UTILS_H
 
-/*
-     Add a SAF root path to the list of monitored paths
-*/
+#include <string>
+#include "utility"
+
+void clearSAFPaths();
 void addSAFPath(std::string safPath);
 
-/*
-     Clear all SAF root paths
-*/
-void clearSAFPaths();
-
-/*
-     Remove . ./ ../ etc from a path
-*/
 std::string getCanonicalPath(std::string path);
-
-/*
-    Return true is in SAF area
-*/
 bool isInSAF(std::string path);
+
+std::string getCurrentWorkingDirectory();
+void setCurrentWorkingDirectory(const std::string &cwd);
+
+#endif
