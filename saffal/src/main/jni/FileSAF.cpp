@@ -60,6 +60,8 @@ void *loadRealFunc(const char *name)
 		LOGI("opendir  = %p", dlsym(libc, "opendir"));
 		LOGI("chdir    = %p", dlsym(libc, "chdir"));
 		LOGI("getcwd   = %p", dlsym(libc, "getcwd"));
+		LOGI("getcwd   = %p", dlsym(libc, "readdir_r"));
+		LOGI("getcwd   = %p", dlsym(libc, "readdir"));
 	}
 
 	void *func;
@@ -705,5 +707,30 @@ char *getcwd(char *buf, size_t size)
 	memcpy(buf, cwd.c_str(), cwd.length() + 1);
 	return buf;
 }
+
+int readdir_r(DIR *dirp, struct dirent *entry, struct dirent **result) {
+	LOGI("readdir_r %p", dirp);
+
+	DIR_SAF *dirSafe = (DIR_SAF *)dirp;
+	std::set<DIR_SAF *>::iterator it = openDIRS.find(dirSafe);
+
+	if (it != openDIRS.end()) {
+		if (dirSafe->position < dirSafe->items.size()) {
+			*entry = dirSafe->items.at(dirSafe->position++);
+			*result = entry;
+			return 0;
+		} else {
+			*result = nullptr;
+			return 0;
+		}
+	} else {
+		static int (*readdir_r_real)(DIR *, struct dirent *, struct dirent **) = NULL;
+		if (!readdir_r_real) {
+			readdir_r_real = (int (*)(DIR *, struct dirent *, struct dirent **))loadRealFunc("readdir_r");
+		}
+		return readdir_r_real(dirp, entry, result);
+	}
+}
+
 }
 #endif

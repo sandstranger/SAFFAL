@@ -227,29 +227,57 @@ public class UtilsSAF {
 
     @Nullable
     public static String getRealPathFromUri(@NonNull Uri uri) {
-        try {
-            ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(uri, "r");
-            if (pfd != null) {
-                String real = getFdPath(pfd.getFd());
-                pfd.close();
-                if (!TextUtils.isEmpty(real)) return real;
-            }
-        } catch (Exception ignored) {}
+        if (appContext == null) return null;
 
         try {
             String docId = DocumentsContract.getDocumentId(uri);
             if (docId != null) {
                 if (docId.startsWith("primary:")) {
-                    return Environment.getExternalStorageDirectory() + "/" + docId.substring("primary:".length());
+                    String relative = docId.substring("primary:".length());
+                    if (relative.startsWith("/")) relative = relative.substring(1);
+                    return Environment.getExternalStorageDirectory().getAbsolutePath() + "/" + relative;
                 }
                 if (docId.matches("[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}:.*")) {
                     int colon = docId.indexOf(':');
                     String vol = docId.substring(0, colon);
                     String rel = docId.substring(colon + 1);
+                    if (rel.startsWith("/")) rel = rel.substring(1);
                     return "/storage/" + vol + "/" + rel;
                 }
             }
         } catch (Exception ignored) {}
+
+        try {
+            ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(uri, "r");
+            if (pfd != null) {
+                String rawPath = getFdPath(pfd.getFd());
+                pfd.close();
+                if (!TextUtils.isEmpty(rawPath)) {
+                    String normalized = normalizeInternalPath(rawPath);
+                    if (normalized != null) return normalized;
+                    return rawPath;
+                }
+            }
+        } catch (Exception ignored) {}
+
+        return null;
+    }
+
+    private static String normalizeInternalPath(String path) {
+        if (path.startsWith("/mnt/user/0/emulated/")) {
+            return "/storage/emulated/" + path.substring("/mnt/user/0/emulated/".length());
+        }
+        if (path.startsWith("/mnt/media_rw/")) {
+            String rest = path.substring("/mnt/media_rw/".length());
+            int slashIndex = rest.indexOf('/');
+            if (slashIndex > 0) {
+                String vol = rest.substring(0, slashIndex);
+                String after = rest.substring(slashIndex);
+                return "/storage/" + vol + after;
+            } else {
+                return "/storage/" + rest;
+            }
+        }
         return null;
     }
 

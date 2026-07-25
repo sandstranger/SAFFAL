@@ -14,6 +14,24 @@
 static std::vector<std::string> m_SAFPaths;
 static std::string g_currentWorkingDirectory;
 
+static char* (*original_getcwd)(char*, size_t) = nullptr;
+
+static char* safe_getcwd(char* buf, size_t size) {
+	if (!original_getcwd) {
+		void* libc = dlopen("libc.so", RTLD_LAZY);
+		if (libc) {
+			original_getcwd = (char*(*)(char*, size_t))dlsym(libc, "getcwd");
+		}
+		if (!original_getcwd) {
+			original_getcwd = (char*(*)(char*, size_t))dlsym(RTLD_NEXT, "getcwd");
+		}
+	}
+	if (original_getcwd) {
+		return original_getcwd(buf, size);
+	}
+	return nullptr;
+}
+
 #define IS_SLASH(s) (s == '/')
 static void ap_getparents(char *name)
 {
@@ -118,8 +136,7 @@ std::string getCurrentWorkingDirectory()
 {
 	if (g_currentWorkingDirectory.empty())
 	{
-		char* (*real_getcwd)(char*, size_t) = (char* (*)(char*, size_t)) dlsym(RTLD_DEFAULT, "getcwd");
-		char *cstr = real_getcwd ? real_getcwd(nullptr, 0) : nullptr;
+		char* cstr = safe_getcwd(nullptr, 0);
 		if (cstr)
 		{
 			g_currentWorkingDirectory = cstr;
