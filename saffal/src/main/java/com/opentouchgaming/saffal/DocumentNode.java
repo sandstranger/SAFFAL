@@ -14,10 +14,10 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 
-public class DocumentNode
-{
-    static final String mimeType = "plain";
-    static String TAG = "DocumentNode";
+public class DocumentNode {
+    static final String TAG = "DocumentNode";
+    static final String DEFAULT_MIME_TYPE = "application/octet-stream";
+
     public String name;
     public String documentId;
     public boolean exists;
@@ -25,295 +25,184 @@ public class DocumentNode
     public long size;
     public long modifiedDate;
     public DocumentNode parent;
-    // The SAF tree URI this node belongs to (set on root nodes, propagated to all children)
     public Uri treeUri;
 
     private List<DocumentNode> children;
 
-    /**
-     * Traverse a tree to find a particular DocumentNode (file or directory). Path must look like:  folder1/folder2/file, or folder1/folder2/folder3
-     *
-     * @return The node if it exists, otherwise null;
-     */
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
-    public static DocumentNode findDocumentNode(DocumentNode rootNode, String documentPath)
-    {
-        DocumentNode node = null;
+    public static DocumentNode findDocumentNode(DocumentNode rootNode, String documentPath) {
+        if (documentPath == null || rootNode == null) return null;
+        if (!rootNode.isDirectory) return null;
 
-        if (documentPath != null)
-        {
-            // Split path into parts
-            String[] parts = documentPath.split("\\/", -1);
+        String[] parts = documentPath.split("/", -1);
+        DocumentNode current = rootNode;
 
-            node = rootNode;
-
-            for (String part : parts)
-            {
-                if (part.length() > 0)
-                { // part will be an empty string if documentPath was an empty string
-
-                    if (node == null)
-                        break;
-
-                    node = node.findChild(part);
-                }
-            }
+        for (String part : parts) {
+            if (part.isEmpty()) continue;
+            if (current == null || !current.isDirectory) return null;
+            current = current.findChild(part);
+            if (current == null) return null;
         }
-
-        return node;
+        return current;
     }
 
-    /**
-     * Create all the directories in documentPath up to the end (like mkdirs)
-     *
-     * @return The node if it exists or has been created, otherwise null;
-     */
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
-    public static DocumentNode createAllNodes(DocumentNode rootNode, String documentPath) throws FileNotFoundException
-    {
-        DBG("DocumentNode: createAllNodes: " + documentPath);
+    public static DocumentNode createAllNodes(DocumentNode rootNode, String documentPath)
+            throws FileNotFoundException {
+        DBG("createAllNodes: " + documentPath);
+        if (documentPath == null || rootNode == null || !rootNode.isDirectory) return null;
 
-        DocumentNode node = null;
+        String[] parts = documentPath.split("/", -1);
+        DocumentNode current = rootNode;
 
-        if (documentPath != null)
-        {
-            // Split path into parts
-            String[] parts = documentPath.split("\\/", -1);
-
-            node = rootNode;
-
-            for (String part : parts)
-            {
-                if (part.length() > 0)
-                { // part will be an empty string if documentPath was an empty string
-                    DBG("DocumentNode: createAllNodes: Checking part: " + part);
-                    if (node != null && node.isDirectory)
-                    {
-                        DocumentNode next = node.findChild(part);
-                        // Check if directory already exists
-                        if (next == null)
-                        {
-                            // Try to create the next level of folder
-                            node = node.createChild(true, part);
-                        }
-                        else
-                        {
-                            node = next;
-                        }
-                    }
-                    else
-                    {
-                        DBG("DocumentNode: createAllNodes: Error, DocumentNode is not a directory");
-                        node = null;
-                        break;
-                    }
+        for (String part : parts) {
+            if (part.isEmpty()) continue;
+            if (current == null || !current.isDirectory) {
+                DBG("createAllNodes: current not a directory");
+                return null;
+            }
+            DocumentNode next = current.findChild(part);
+            if (next == null) {
+                next = current.createChild(true, part);
+                if (next == null) {
+                    DBG("createAllNodes: failed to create " + part);
+                    return null;
                 }
             }
+            current = next;
         }
-
-        return node;
-    }
-
-    private static void DBG(String str)
-    {
-        Log.d(TAG, str);
+        return current;
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
-    public DocumentNode findChild(String name)
-    {
-        DocumentNode node = null;
-
-        findChildren();
-
-        if (children != null)
-        {
-            for (DocumentNode n : children)
-            {
-                if (n.name.contentEquals(name))
-                {
-                    node = n;
-                    break;
-                }
-            }
-
-            // If didn't find the exact name, do a case insensitive search
-            if (node == null && UtilsSAF.CASE_INSENSITIVE)
-            {
-                for (DocumentNode n : children)
-                {
-                    if (n.name.toLowerCase().contentEquals(name.toLowerCase()))
-                    {
-                        node = n;
-                        break;
-                    }
-                }
-            }
+    public synchronized DocumentNode findChild(String name) {
+        if (!isDirectory) return null;
+        if (children == null) {
+            loadChildren();
         }
-        return node;
-    }
+        if (children == null) return null;
 
-    @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
-    public ArrayList<DocumentNode> getChildren()
-    {
-        findChildren();
-
-        ArrayList<DocumentNode> ret = new ArrayList<>();
-
-        if (children != null)
-            ret.addAll(children);
-
-        return ret;
-    }
-
-    @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
-    public synchronized void findChildren()
-    {
-        if (isDirectory)
-        {
-            if (children == null) // Check if already been scanned, this is allows caching of the files
-            {
-                children = new ArrayList<>();
-
-                Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId);
-
-                Cursor cursor = null;
-                try
-                {
-                    cursor = UtilsSAF.getContentResolver().query(childrenUri,
-                            new String[]{DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE,
-                                    DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_LAST_MODIFIED,
-                                    DocumentsContract.Document.COLUMN_SIZE}, null, null, null);
-
-                    while (cursor.moveToNext())
-                    {
-                        DocumentNode newNode = new DocumentNode();
-                        newNode.parent = this;
-                        newNode.treeUri = this.treeUri;
-                        newNode.exists = true;
-                        newNode.name = cursor.getString(0);
-                        newNode.isDirectory = DocumentsContract.Document.MIME_TYPE_DIR.equals(cursor.getString(1));
-                        newNode.documentId = cursor.getString(2);
-                        newNode.modifiedDate = cursor.getLong(3);
-                        newNode.size = cursor.getLong(4);
-
-                        // DBG("Found " + newNode.name + " size = " + newNode.size);
-
-                        children.add(newNode);
-                    }
-                }
-                catch (Exception ignored)
-                {
-                    DBG("findChildren: Some Exception: " + ignored);
-                }
-                finally
-                {
-                    try
-                    {
-                        if (cursor != null)
-                            cursor.close();
-                    }
-                    catch (Exception ignored)
-                    {
-                        DBG("findChildren: Some Exception: " + ignored);
-                    }
-                }
-            }
+        for (DocumentNode child : children) {
+            if (child.name.equals(name)) return child;
         }
-        else
-        {
-            DBG("DocumentNode: ERROR, tried to findChildren of non directory");
-        }
-    }
-
-    @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
-    public synchronized void clearCache()
-    {
-        children = null;
-    }
-
-    @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
-    public DocumentNode createChild(boolean directory, String name) throws FileNotFoundException
-    {
-        DBG("DocumentNode: createChild: " + name);
-
-        if (isDirectory)
-        {
-            if (findChild(name) != null)
-            {
-                DBG("DocumentNode: createChild ERROR, file " + name + " already exists, not creating");
-            }
-            else
-            {
-                Uri myUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId);
-
-                try
-                {
-                    if (directory)
-                        DocumentsContract.createDocument(UtilsSAF.getContentResolver(), myUri, DocumentsContract.Document.MIME_TYPE_DIR, name);
-                    else
-                        DocumentsContract.createDocument(UtilsSAF.getContentResolver(), myUri, mimeType, name);
-                }
-                catch (Exception e)
-                {
-                    throw new FileNotFoundException();
-                }
-
-                // We have created a new file, null the children cache so it's updated next time
-                clearCache();
-
-                return findChild(name);
-            }
-        }
-        else
-        {
-            DBG("DocumentNode: createChild ERROR, tried to create child in non-directory");
+        for (DocumentNode child : children) {
+            if (child.name.equalsIgnoreCase(name)) return child;
         }
         return null;
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
-    public boolean deleteChild(String name) throws FileNotFoundException
-    {
-        DBG("DocumentNode: deleteChild: " + name);
-
-        if (isDirectory)
-        {
-            DocumentNode child = findChild(name);
-            if (child == null)
-            {
-                DBG("DocumentNode: deleteChild ERROR, file " + name + " does not exists");
-            }
-            else
-            {
-                Uri myUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, child.documentId);
-
-                // clear cache
-                clearCache();
-
-                return DocumentsContract.deleteDocument(UtilsSAF.getContentResolver(), myUri);
-            }
+    public synchronized List<DocumentNode> getChildren() {
+        if (isDirectory && children == null) {
+            loadChildren();
         }
-        else
-        {
-            DBG("DocumentNode: deleteChild ERROR, tried to delete child in non-directory");
-        }
-        return false;
+        if (children == null) return new ArrayList<>();
+        return new ArrayList<>(children);
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
-    public InputStream getInputStream() throws FileNotFoundException
-    {
-        Uri myUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId);
-
-        return UtilsSAF.getContentResolver().openInputStream(myUri);
+    private void loadChildren() {
+        if (!isDirectory) return;
+        children = new ArrayList<>();
+        Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId);
+        Cursor cursor = null;
+        try {
+            cursor = UtilsSAF.getContentResolver().query(childrenUri,
+                    new String[]{
+                            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                            DocumentsContract.Document.COLUMN_MIME_TYPE,
+                            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                            DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                            DocumentsContract.Document.COLUMN_SIZE
+                    }, null, null, null);
+            while (cursor != null && cursor.moveToNext()) {
+                DocumentNode node = new DocumentNode();
+                node.name = cursor.getString(0);
+                String mime = cursor.getString(1);
+                node.isDirectory = DocumentsContract.Document.MIME_TYPE_DIR.equals(mime);
+                node.documentId = cursor.getString(2);
+                node.modifiedDate = cursor.getLong(3);
+                node.size = cursor.getLong(4);
+                node.treeUri = this.treeUri;
+                node.parent = this;
+                node.exists = true;
+                children.add(node);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "loadChildren failed: " + e.getMessage());
+            children = null;
+        } finally {
+            if (cursor != null) {
+                try { cursor.close(); } catch (Exception ignored) {}
+            }
+        }
     }
 
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
-    public OutputStream getOutputStream() throws FileNotFoundException
-    {
-        Uri myUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId);
+    public synchronized DocumentNode createChild(boolean directory, String name) throws FileNotFoundException {
+        DBG("createChild: " + name + " dir=" + directory);
+        if (!isDirectory) {
+            throw new FileNotFoundException("Parent is not a directory");
+        }
+        if (findChild(name) != null) {
+            DBG("createChild: already exists, returning existing");
+            return findChild(name);
+        }
 
-        return UtilsSAF.getContentResolver().openOutputStream(myUri);
+        Uri parentUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId);
+        try {
+            String mime = directory ? DocumentsContract.Document.MIME_TYPE_DIR : DEFAULT_MIME_TYPE;
+            DocumentsContract.createDocument(UtilsSAF.getContentResolver(), parentUri, mime, name);
+        } catch (Exception e) {
+            Log.e(TAG, "createChild failed: " + e.getMessage());
+            throw new FileNotFoundException("Cannot create " + name);
+        }
+
+        children = null;
+        return findChild(name);
+    }
+
+    @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
+    public synchronized boolean deleteChild(String name) throws FileNotFoundException {
+        DBG("deleteChild: " + name);
+        if (!isDirectory) {
+            throw new FileNotFoundException("Not a directory");
+        }
+        DocumentNode child = findChild(name);
+        if (child == null) {
+            throw new FileNotFoundException("Child not found: " + name);
+        }
+
+        Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, child.documentId);
+        try {
+            boolean result = DocumentsContract.deleteDocument(UtilsSAF.getContentResolver(), docUri);
+            if (result) {
+                children = null;
+            }
+            return result;
+        } catch (Exception e) {
+            Log.e(TAG, "deleteChild failed: " + e.getMessage());
+            return false;
+        }
+    }
+
+    public synchronized void clearCache() {
+        children = null;
+    }
+
+    @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
+    public InputStream getInputStream() throws FileNotFoundException {
+        Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId);
+        return UtilsSAF.getContentResolver().openInputStream(docUri);
+    }
+
+    @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
+    public OutputStream getOutputStream() throws FileNotFoundException {
+        Uri docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId);
+        return UtilsSAF.getContentResolver().openOutputStream(docUri, "wt");
+    }
+
+    private static void DBG(String msg) {
+        Log.d(TAG, msg);
     }
 }

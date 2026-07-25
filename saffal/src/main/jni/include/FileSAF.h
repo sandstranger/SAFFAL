@@ -1,11 +1,8 @@
 #ifndef FILESAF_H
 #define FILESAF_H
-#include <cstdio>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <dirent.h>
-#include <unistd.h>
-#include <cstddef>
 
 #ifdef __cplusplus
 extern "C" {
