@@ -256,10 +256,15 @@ public class FileSAF extends File {
     @Override
     @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
     public String[] list() {
+        if (isRealFile) {
+            return super.list();
+        }
         FileSAF[] files = listFiles();
         if (files == null) return null;
         String[] names = new String[files.length];
-        for (int i = 0; i < files.length; i++) names[i] = files[i].getName();
+        for (int i = 0; i < files.length; i++) {
+            names[i] = files[i].getName();
+        }
         return names;
     }
 
