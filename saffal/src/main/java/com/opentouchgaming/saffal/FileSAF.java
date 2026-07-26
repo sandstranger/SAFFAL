@@ -33,7 +33,7 @@ public class FileSAF extends File {
     public FileSAF(@NonNull String path) {
         super(path);
         this.fullPath = canonicalize(path);
-        this.isRealFile = !UtilsSAF.isInSAFRoot(fullPath);
+        this.isRealFile = !UtilsSAF.isSafEnabled() || !UtilsSAF.isInSAFRoot(fullPath);
     }
 
     public FileSAF(@NonNull String parent, @NonNull String child) {
@@ -55,7 +55,7 @@ public class FileSAF extends File {
         } else {
             this.fullPath = canonicalize(path);
         }
-        this.isRealFile = !UtilsSAF.isInSAFRoot(fullPath);
+        this.isRealFile = !UtilsSAF.isSafEnabled() || !UtilsSAF.isInSAFRoot(fullPath);
     }
 
 

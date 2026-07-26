@@ -17,6 +17,7 @@
 #include <map>
 #include <vector>
 #include <set>
+#include <atomic>
 
 #include <android/log.h>
 
@@ -29,8 +30,10 @@
 
 static std::map<std::string, int> invalidPaths;
 bool cacheInvalidPaths = true;
+std::atomic<bool> g_safEnabled{false};
 
 extern "C" void clearUserFilesFromCache(int lock);
+extern bool isInSafePath(const std::string& path);
 
 extern "C" {
 struct PathCache {
@@ -48,7 +51,8 @@ static inline void resolve_path(const char *raw, std::string &canon, bool &saf) 
 		return;
 	}
 	canon = getCanonicalPath(std::string(raw));
-	if (isInSafePath(canon)) {
+
+	if (!g_safEnabled.load(std::memory_order_acquire) || isInSafePath(canon)) {
 		saf = false;
 	} else {
 		saf = isInSAF(canon);

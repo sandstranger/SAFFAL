@@ -28,11 +28,13 @@ import java.util.Map;
 
 public class UtilsSAF {
     private static final String TAG = "UtilsSAF";
+    private static final String IS_SAF_ENABLED_SHARED_PREFS_KEY = "enable_saf";
     private static Context appContext;
     private static int cacheNativeFs = 0;
     private static final List<TreeRoot> treeRoots = new ArrayList<>();
     private static final Map<String, Boolean> safCache = new HashMap<>();
     private static final Map<String, Boolean> rootPrefixCache = new HashMap<>();
+    private static volatile boolean safEnabled = false;
 
     private static void invalidateCaches() {
         safCache.clear();
@@ -42,11 +44,16 @@ public class UtilsSAF {
     public static void setContext(@NonNull Context ctx, boolean cacheNativeFs) {
         appContext = ctx.getApplicationContext();
         UtilsSAF.cacheNativeFs = cacheNativeFs ? 1 : 0;
+        safEnabled = LoadSafEnabledStateFromSharesPrefs();
         System.loadLibrary("saffal");
         var cachePath = appContext.getCacheDir().getAbsolutePath();
         var filesPath = appContext.getFilesDir().getAbsolutePath();
         var externalFilesPath = appContext.getExternalFilesDir(null).getAbsolutePath();
         FileJNI.initSafePaths(new String[]{cachePath, filesPath, externalFilesPath});
+        FileJNI.nativeSetSafEnabled(safEnabled);
+        if (!safEnabled) {
+            clearTreeRoots();
+        }
     }
 
     public static Context getContext() {
@@ -57,6 +64,23 @@ public class UtilsSAF {
         if (appContext == null)
             throw new IllegalStateException("UtilsSAF.setContext() must be called first");
         return appContext.getContentResolver();
+    }
+
+    public static void setSafEnabled(boolean enabled) {
+        safEnabled = enabled;
+        FileJNI.nativeSetSafEnabled(enabled);
+        if (!enabled) {
+            clearTreeRoots();
+        }
+        SharedPreferences prefs = appContext.getSharedPreferences("utilsSAF", Context.MODE_PRIVATE);
+        SharedPreferences.Editor edit = prefs.edit();
+        edit.clear();
+        edit.putBoolean(IS_SAF_ENABLED_SHARED_PREFS_KEY, enabled);
+        edit.apply();
+    }
+
+    public static boolean isSafEnabled() {
+        return safEnabled;
     }
 
     public static boolean addTreeRootFromUri(@NonNull Uri treeUri) {
@@ -80,6 +104,11 @@ public class UtilsSAF {
         return true;
     }
 
+    private static boolean LoadSafEnabledStateFromSharesPrefs(){
+        SharedPreferences prefs = appContext.getSharedPreferences("utilsSAF", Context.MODE_PRIVATE);
+        return prefs.getBoolean(IS_SAF_ENABLED_SHARED_PREFS_KEY, false);
+    }
+
     @Nullable
     private static String guessRootPath(String documentId) {
         if (TextUtils.isEmpty(documentId)) return null;
@@ -100,7 +129,6 @@ public class UtilsSAF {
             if (path.charAt(0) == '/') path = path.substring(1);
             return base + "/" + path;
         }
-
 
         if (volume.length() == 9 && volume.charAt(4) == '-') {
             String base = "/storage/" + volume;

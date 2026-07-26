@@ -6,9 +6,7 @@
 #include <jni.h>
 #include <pthread.h>
 #include <vector>
-
-static pthread_mutex_t lock;
-
+#include <atomic>
 
 #define LOGI(...) ((void)0)
 #define LOGW(...) ((void)0)
@@ -23,8 +21,10 @@ static pthread_mutex_t lock;
 
 static JavaVM* m_jvm = nullptr;
 static JNIEnv* firstEnv = nullptr;
+static pthread_mutex_t lock;
 
 extern bool cacheInvalidPaths;
+extern std::atomic<bool> g_safEnabled;
 
 static bool getEnv(JNIEnv **jniEnv) {
 	if (m_jvm == nullptr) {
@@ -99,6 +99,11 @@ Java_com_opentouchgaming_saffal_FileJNI_initSafePaths(JNIEnv* env, jclass, jobje
 		env->ReleaseStringUTFChars(pathStr, pathC);
 		env->DeleteLocalRef(pathStr);
 	}
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_opentouchgaming_saffal_FileJNI_nativeSetSafEnabled(JNIEnv*, jclass, jboolean enabled) {
+	g_safEnabled.store(enabled, std::memory_order_release);
 }
 
 int FileJNI_fopen(const char* filename, const char* mode) {
