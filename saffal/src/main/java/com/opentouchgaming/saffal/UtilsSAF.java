@@ -262,7 +262,7 @@ public class UtilsSAF {
     }
 
     public static boolean loadTreeRoots() {
-        if (appContext == null) return false;
+        if (appContext == null || !safEnabled) return false;
         SharedPreferences prefs = appContext.getSharedPreferences("utilsSAF", Context.MODE_PRIVATE);
         int count = prefs.getInt("count", 0);
         if (count > 0) {
