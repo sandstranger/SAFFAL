@@ -8,6 +8,7 @@ import java.io.InputStream;
 
 public class FileJNI {
     public static native void initSAFPaths(String[] SAFPaths, int cacheNativeFs);
+    public static native void initSafePaths(String[] paths);
 
     public static int fopen(final String filePath, final String mode) {
         boolean write = mode.contains("w") || mode.contains("a");

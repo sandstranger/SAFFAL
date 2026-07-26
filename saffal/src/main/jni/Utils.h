@@ -12,5 +12,7 @@ bool isInSAF(std::string path);
 
 std::string getCurrentWorkingDirectory();
 void setCurrentWorkingDirectory(const std::string &cwd);
-
+void clearSafePaths();
+void addSafePath(const std::string& path);
+bool isInSafePath(const std::string& path);
 #endif

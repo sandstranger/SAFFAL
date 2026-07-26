@@ -48,7 +48,12 @@ static inline void resolve_path(const char *raw, std::string &canon, bool &saf) 
 		return;
 	}
 	canon = getCanonicalPath(std::string(raw));
-	saf   = isInSAF(canon);
+	if (isInSafePath(canon)) {
+		saf = false;
+	} else {
+		saf = isInSAF(canon);
+	}
+
 	tls_cache.raw       = raw;
 	tls_cache.canonical = canon;
 	tls_cache.inSAF     = saf;
@@ -89,7 +94,6 @@ bool checkPathExistsCache(const char *path) {
 	}
 	return exists;
 }
-
 
 int open(const char *path, int oflag, mode_t modes) {
 	std::string canonical; bool saf;

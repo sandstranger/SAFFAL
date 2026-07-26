@@ -43,6 +43,10 @@ public class UtilsSAF {
         appContext = ctx.getApplicationContext();
         UtilsSAF.cacheNativeFs = cacheNativeFs ? 1 : 0;
         System.loadLibrary("saffal");
+        var cachePath = appContext.getCacheDir().getAbsolutePath();
+        var filesPath = appContext.getFilesDir().getAbsolutePath();
+        var externalFilesPath = appContext.getExternalFilesDir(null).getAbsolutePath();
+        FileJNI.initSafePaths(new String[]{cachePath, filesPath, externalFilesPath});
     }
 
     public static Context getContext() {

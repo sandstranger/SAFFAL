@@ -88,6 +88,19 @@ Java_com_opentouchgaming_saffal_FileJNI_initSAFPaths(JNIEnv* env, jclass cls, jo
 	}
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_opentouchgaming_saffal_FileJNI_initSafePaths(JNIEnv* env, jclass, jobjectArray paths) {
+	clearSafePaths();
+	jsize count = env->GetArrayLength(paths);
+	for (jsize i = 0; i < count; i++) {
+		jstring pathStr = (jstring)env->GetObjectArrayElement(paths, i);
+		const char* pathC = env->GetStringUTFChars(pathStr, 0);
+		addSafePath(std::string(pathC));
+		env->ReleaseStringUTFChars(pathStr, pathC);
+		env->DeleteLocalRef(pathStr);
+	}
+}
+
 int FileJNI_fopen(const char* filename, const char* mode) {
 	MUTEX_LOCK
 	JNIEnv* env;

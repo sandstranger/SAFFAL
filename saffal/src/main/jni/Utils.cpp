@@ -16,6 +16,7 @@
 
 static std::vector<std::string> m_SAFPaths;
 static std::string g_currentWorkingDirectory;
+static std::vector<std::string> m_SafePaths;
 
 struct PathCache {
 	std::string raw;
@@ -26,6 +27,25 @@ struct PathCache {
 static thread_local PathCache tls_cache;
 
 static char* (*original_getcwd)(char*, size_t) = nullptr;
+
+void clearSafePaths() {
+	m_SafePaths.clear();
+}
+
+void addSafePath(const std::string& path) {
+	m_SafePaths.push_back(path);
+}
+
+bool isInSafePath(const std::string& path) {
+	for (const auto& sp : m_SafePaths) {
+		if (path.compare(0, sp.length(), sp) == 0) {
+			if (path.length() == sp.length() || path[sp.length()] == '/') {
+				return true;
+			}
+		}
+	}
+	return false;
+}
 
 static char* safe_getcwd(char* buf, size_t size) {
 	if (!original_getcwd) {
