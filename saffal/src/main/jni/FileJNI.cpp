@@ -75,7 +75,6 @@ extern "C" __attribute__((visibility("default"))) jint JNI_OnLoad(JavaVM* vm, vo
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_opentouchgaming_saffal_FileJNI_initSAFPaths(JNIEnv* env, jclass cls, jobjectArray SAFPaths, jint cacheNativeFs) {
-	cacheInvalidPaths = (cacheNativeFs != 0);
 	clearSAFPaths();
 
 	jsize count = env->GetArrayLength(SAFPaths);

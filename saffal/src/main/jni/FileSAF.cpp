@@ -18,7 +18,7 @@
 #include <vector>
 #include <set>
 #include <atomic>
-
+#include <cstring>
 #include <android/log.h>
 
 #define LOGI(...) ((void)0)
@@ -28,8 +28,6 @@
 #define O_WRONLY  01
 #define O_RDWR    02
 
-static std::map<std::string, int> invalidPaths;
-bool cacheInvalidPaths = true;
 std::atomic<bool> g_safEnabled{false};
 
 extern "C" void clearUserFilesFromCache(int lock);
@@ -73,30 +71,6 @@ void *loadRealFunc(const char *name) {
 	void *func = libc ? dlsym(libc, name) : dlsym(RTLD_NEXT, name);
 	if (!func) LOGE("FATAL: %s not found", name);
 	return func;
-}
-
-bool checkPathExistsCache(const char *path) {
-	bool exists = false;
-	const char *parent = dirname(path);
-	std::string parentString = parent;
-	if (parentString.length() > 2) {
-		if (invalidPaths.find(parentString) == invalidPaths.end()) {
-			static int (*stat_real)(const char *, struct stat *) = NULL;
-			if (!stat_real) stat_real = (int (*)(const char *, struct stat *)) loadRealFunc("stat");
-			struct stat st;
-			if (!stat_real(parentString.c_str(), &st)) {
-				invalidPaths[parentString] = 1;
-				exists = true;
-			} else {
-				invalidPaths[parentString] = 0;
-			}
-		} else {
-			exists = (invalidPaths[parentString] == 1);
-		}
-	} else {
-		exists = true;
-	}
-	return exists;
 }
 
 int open(const char *path, int oflag, mode_t modes) {
@@ -153,7 +127,6 @@ int close(int fd) {
 }
 
 int mkdir(const char *path, mode_t mode) {
-	if (cacheInvalidPaths) invalidPaths.clear();
 	std::string canonical; bool saf;
 	resolve_path(path, canonical, saf);
 	int status = FileJNI_mkdir(canonical.c_str());
@@ -179,8 +152,6 @@ int stat(const char *path, struct stat *statbuf) {
 	} else {
 		static int (*real)(const char *, struct stat *) = NULL;
 		if (!real) real = (int (*)(const char *, struct stat *)) loadRealFunc("stat");
-		if (cacheInvalidPaths && !checkPathExistsCache(path))
-			return -1;
 		return real(path, statbuf);
 	}
 }
