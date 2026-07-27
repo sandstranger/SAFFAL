@@ -172,22 +172,24 @@ Java_com_opentouchgaming_saffal_FileJNI_initPosixHooks(JNIEnv*, jclass)
 		LOGE("shadowhook_init failed: %s", shadowhook_to_errmsg(shadowhook_get_errno()));
 		return;
 	}
-	hook_by_name("libc.so", "fopen", 	 fopen,     &real_fopen);
-    hook_by_name("libc.so", "open",      open,      &real_open);
-    hook_by_name("libc.so", "rename",    rename,    &real_rename);
-    hook_by_name("libc.so", "chdir",     chdir,     &real_chdir);
-    hook_by_name("libc.so", "readdir",   readdir,   &real_readdir);
-    hook_by_name("libc.so", "close",     close,     &real_close);
-    hook_by_name("libc.so", "access",    access,    &real_access);
-    hook_by_name("libc.so", "mkdir",     mkdir,     &real_mkdir);
-    hook_by_name("libc.so", "fclose",    fclose,    &real_fclose);
-    hook_by_name("libc.so", "closedir",  closedir,  &real_closedir);
-    hook_by_name("libc.so", "scandir",   scandir,   &real_scandir);
-    hook_by_name("libc.so", "stat",      stat,      &real_stat);
-    hook_by_name("libc.so", "readdir_r", readdir_r, &real_readdir_r);
-    hook_by_name("libc.so", "remove",    remove,    &real_remove);
-    hook_by_name("libc.so", "opendir",   opendir,   &real_opendir);
-    hook_by_name("libc.so", "getcwd", 	 getcwd,       &real_getcwd);
+
+    static const char* libcName = "libc.so";
+	hook_by_name(libcName, "fopen", 	 fopen,     &real_fopen);
+    hook_by_name(libcName, "open",      open,      &real_open);
+    hook_by_name(libcName, "rename",    rename,    &real_rename);
+    hook_by_name(libcName, "chdir",     chdir,     &real_chdir);
+    hook_by_name(libcName, "readdir",   readdir,   &real_readdir);
+    hook_by_name(libcName, "close",     close,     &real_close);
+    hook_by_name(libcName, "access",    access,    &real_access);
+    hook_by_name(libcName, "mkdir",     mkdir,     &real_mkdir);
+    hook_by_name(libcName, "fclose",    fclose,    &real_fclose);
+    hook_by_name(libcName, "closedir",  closedir,  &real_closedir);
+    hook_by_name(libcName, "scandir",   scandir,   &real_scandir);
+    hook_by_name(libcName, "stat",      stat,      &real_stat);
+    hook_by_name(libcName, "readdir_r", readdir_r, &real_readdir_r);
+    hook_by_name(libcName, "remove",    remove,    &real_remove);
+    hook_by_name(libcName, "opendir",   opendir,   &real_opendir);
+    hook_by_name(libcName, "getcwd", 	 getcwd,       &real_getcwd);
 	posixCallsWasHooked = true;
 }
 
