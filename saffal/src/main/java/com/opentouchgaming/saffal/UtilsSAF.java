@@ -1,5 +1,6 @@
 package com.opentouchgaming.saffal;
 
+import android.annotation.SuppressLint;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
@@ -34,6 +35,7 @@ public class UtilsSAF {
     private static final List<TreeRoot> treeRoots = new ArrayList<>();
     private static final Map<String, Boolean> safCache = new HashMap<>();
     private static final Map<String, Boolean> rootPrefixCache = new HashMap<>();
+    private static final String[] jniLibs = new String[]{"shadowhook", "saffal"};
     private static volatile boolean safEnabled = false;
 
     private static void invalidateCaches() {
@@ -41,17 +43,21 @@ public class UtilsSAF {
         rootPrefixCache.clear();
     }
 
-    public static void setContext(@NonNull Context ctx, boolean cacheNativeFs) {
+    public static void setContext(@NonNull Context ctx) {
         appContext = ctx.getApplicationContext();
-        UtilsSAF.cacheNativeFs = cacheNativeFs ? 1 : 0;
         safEnabled = LoadSafEnabledStateFromSharesPrefs();
-        System.loadLibrary("saffal");
+        for (var jniLib : jniLibs) {
+            System.loadLibrary(jniLib);
+        }
         var cachePath = appContext.getCacheDir().getAbsolutePath();
         var filesPath = appContext.getFilesDir().getAbsolutePath();
         var externalFilesPath = appContext.getExternalFilesDir(null).getAbsolutePath();
         FileJNI.initSafePaths(new String[]{cachePath, filesPath, externalFilesPath});
         FileJNI.nativeSetSafEnabled(safEnabled);
-        if (!safEnabled) {
+        if (safEnabled) {
+            FileJNI.initPosixHooks();
+        }
+        else {
             clearTreeRoots();
         }
     }
@@ -66,6 +72,7 @@ public class UtilsSAF {
         return appContext.getContentResolver();
     }
 
+    @SuppressLint("ApplySharedPref")
     public static void setSafEnabled(boolean enabled) {
         safEnabled = enabled;
         FileJNI.nativeSetSafEnabled(enabled);
@@ -76,7 +83,7 @@ public class UtilsSAF {
         SharedPreferences.Editor edit = prefs.edit();
         edit.clear();
         edit.putBoolean(IS_SAF_ENABLED_SHARED_PREFS_KEY, enabled);
-        edit.apply();
+        edit.commit();
     }
 
     public static boolean isSafEnabled() {

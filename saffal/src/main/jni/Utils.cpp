@@ -25,8 +25,7 @@ struct PathCache {
 	bool valid = false;
 };
 static thread_local PathCache tls_cache;
-
-static char* (*original_getcwd)(char*, size_t) = nullptr;
+extern char *(*real_getcwd)(char* const buf, size_t size);
 
 void clearSafePaths() {
 	m_SafePaths.clear();
@@ -45,22 +44,6 @@ bool isInSafePath(const std::string& path) {
 		}
 	}
 	return false;
-}
-
-static char* safe_getcwd(char* buf, size_t size) {
-	if (!original_getcwd) {
-		void* libc = dlopen("libc.so", RTLD_LAZY);
-		if (libc) {
-			original_getcwd = (char*(*)(char*, size_t))dlsym(libc, "getcwd");
-		}
-		if (!original_getcwd) {
-			original_getcwd = (char*(*)(char*, size_t))dlsym(RTLD_NEXT, "getcwd");
-		}
-	}
-	if (original_getcwd) {
-		return original_getcwd(buf, size);
-	}
-	return nullptr;
 }
 
 static void ap_getparents(char *path) {
@@ -175,7 +158,7 @@ bool isInSAF(std::string path) {
 
 std::string getCurrentWorkingDirectory() {
 	if (g_currentWorkingDirectory.empty()) {
-		char* cstr = safe_getcwd(nullptr, 0);
+		char* cstr = real_getcwd(nullptr, 0);
 		if (cstr) {
 			g_currentWorkingDirectory = cstr;
 			free(cstr);

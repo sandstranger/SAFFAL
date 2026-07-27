@@ -20,6 +20,7 @@
 #include <atomic>
 #include <cstring>
 #include <android/log.h>
+#include <asm-generic/fcntl.h>
 
 #define LOGI(...) ((void)0)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "FileSAF NDK", __VA_ARGS__)
@@ -29,6 +30,28 @@
 #define O_RDWR    02
 
 std::atomic<bool> g_safEnabled{false};
+FILE *(*real_fopen)(const char *, const char *) = nullptr;
+int (*real_open)(const char *, int, ...) = nullptr;
+int (*real_fclose)(FILE *) = nullptr;
+int (*real_close)(int) = nullptr;
+int (*real_mkdir)(const char *, mode_t) = nullptr;
+int (*real_stat)(const char *, struct stat *) = nullptr;
+int (*real_access)(const char *, int) = nullptr;
+int (*real_remove)(const char *) = nullptr;
+struct dirent *(*real_readdir)(DIR *) = nullptr;
+DIR *(*real_opendir)(const char *) = nullptr;
+int (*real_readdir_r)(DIR *,struct dirent *,
+                      struct dirent **) = nullptr;
+int (*real_closedir)(DIR *) = nullptr;
+int (*real_scandir)(const char *,
+                    struct dirent ***,
+                    int (*)(const struct dirent *),
+                    int (*)(const struct dirent **,
+                            const struct dirent **)) = nullptr;
+int (*real_rename)(const char *,
+                   const char *) = nullptr;
+int (*real_chdir)(const char *) = nullptr;
+char *(*real_getcwd)(char* const buf, size_t size) = nullptr;
 
 extern "C" void clearUserFilesFromCache(int lock);
 extern bool isInSafePath(const std::string& path);
@@ -73,20 +96,33 @@ void *loadRealFunc(const char *name) {
 	return func;
 }
 
-int open(const char *path, int oflag, mode_t modes) {
-	std::string canonical; bool saf;
-	resolve_path(path, canonical, saf);
-
-	if (saf) {
-		const char *mode = (oflag & (O_WRONLY | O_RDWR)) ? "w" : "r";
-		int fd = FileCache_getFd(canonical.c_str(), mode, FileJNI_fopen);
-		return (fd > 0) ? fd : -1;
-	} else {
-		static int (*real)(const char *, int, mode_t) = NULL;
-		if (!real) real = (int (*)(const char *, int, mode_t)) loadRealFunc("open");
-		return real(path, oflag, modes);
-	}
+int open(const char* path, int flags, ...)
+{
+    std::string canonical;
+    bool saf;
+    resolve_path(path, canonical, saf);
+    if (saf)
+    {
+        const char* mode = (flags & (O_WRONLY | O_RDWR)) ? "w" : "r";
+        int fd = FileCache_getFd(
+                canonical.c_str(),
+                mode,
+                FileJNI_fopen
+        );
+        return fd >= 0 ? fd : -1;
+    }
+    mode_t modes = 0;
+    if (flags & O_CREAT)
+    {
+        va_list args;
+        va_start(args, flags);
+        modes = va_arg(args, mode_t);
+        va_end(args);
+        return real_open(path, flags, modes);
+    }
+    return real_open(path, flags);
 }
+
 
 int __open_2(const char *path, int oflag, mode_t modes) {
 	return open(path, oflag, modes);
@@ -106,24 +142,18 @@ FILE *fopen(const char *filename, const char *mode) {
 		}
 		return NULL;
 	} else {
-		static FILE *(*real)(const char *, const char *) = NULL;
-		if (!real) real = (FILE *(*)(const char *, const char *)) loadRealFunc("fopen");
-		return real(filename, mode);
+		return real_fopen(filename, mode);
 	}
 }
 
 int fclose(FILE *file) {
 	FileCache_closeFile(file);
-	static int (*real)(FILE *) = NULL;
-	if (!real) real = (int (*)(FILE *)) loadRealFunc("fclose");
-	return real(file);
+	return real_fclose(file);
 }
 
 int close(int fd) {
 	FileCache_closeFd(fd);
-	static int (*real)(int) = NULL;
-	if (!real) real = (int (*)(int)) loadRealFunc("close");
-	return real(fd);
+	return real_close(fd);
 }
 
 int mkdir(const char *path, mode_t mode) {
@@ -132,9 +162,7 @@ int mkdir(const char *path, mode_t mode) {
 	int status = FileJNI_mkdir(canonical.c_str());
 	if (status == 0) return 0;
 	if (status == 1) return -1;
-	static int (*real)(const char *, mode_t) = NULL;
-	if (!real) real = (int (*)(const char *, mode_t)) loadRealFunc("mkdir");
-	return real(path, mode);
+	return real_mkdir(path, mode);
 }
 
 int stat(const char *path, struct stat *statbuf) {
@@ -150,9 +178,7 @@ int stat(const char *path, struct stat *statbuf) {
 		}
 		return -1;
 	} else {
-		static int (*real)(const char *, struct stat *) = NULL;
-		if (!real) real = (int (*)(const char *, struct stat *)) loadRealFunc("stat");
-		return real(path, statbuf);
+		return real_stat(path, statbuf);
 	}
 }
 
@@ -163,9 +189,7 @@ int remove(const char *path) {
 		clearUserFilesFromCache(1);
 		return FileJNI_delete(canonical.c_str());
 	} else {
-		static int (*real)(const char *) = NULL;
-		if (!real) real = (int (*)(const char *)) loadRealFunc("remove");
-		return real(path);
+		return real_remove(path);
 	}
 }
 
@@ -175,9 +199,7 @@ int access(const char *pathname, int mode) {
 	if (saf) {
 		return FileJNI_exists(canonical.c_str()) ? 0 : -1;
 	} else {
-		static int (*real)(const char *, int) = NULL;
-		if (!real) real = (int (*)(const char *, int)) loadRealFunc("access");
-		return real(pathname, mode);
+		return real_access(pathname, mode);
 	}
 }
 
@@ -213,9 +235,7 @@ DIR *opendir(const char *name) {
 		}
 		return NULL;
 	} else {
-		static DIR *(*real)(const char *) = NULL;
-		if (!real) real = (DIR *(*)(const char *)) loadRealFunc("opendir");
-		return real(name);
+		return real_opendir(name);
 	}
 }
 
@@ -226,9 +246,7 @@ struct dirent *readdir(DIR *dirp) {
 			return &s->items[s->position++];
 		return NULL;
 	} else {
-		static struct dirent *(*real)(DIR *) = NULL;
-		if (!real) real = (struct dirent *(*)(DIR *)) loadRealFunc("readdir");
-		return real(dirp);
+		return real_readdir(dirp);
 	}
 }
 
@@ -244,9 +262,7 @@ int readdir_r(DIR *dirp, struct dirent *entry, struct dirent **result) {
 			return 0;
 		}
 	} else {
-		static int (*real)(DIR *, struct dirent *, struct dirent **) = NULL;
-		if (!real) real = (int (*)(DIR *, struct dirent *, struct dirent **)) loadRealFunc("readdir_r");
-		return real(dirp, entry, result);
+		return real_readdir_r(dirp, entry, result);
 	}
 }
 
@@ -258,9 +274,7 @@ int closedir(DIR *dirp) {
 		delete s;
 		return 0;
 	} else {
-		static int (*real)(DIR *) = NULL;
-		if (!real) real = (int (*)(DIR *)) loadRealFunc("closedir");
-		return real(dirp);
+		return real_closedir(dirp);
 	}
 }
 
@@ -284,14 +298,7 @@ int scandir(const char *dirp, struct dirent ***namelist,
 		closedir((DIR *)d);
 		return cnt;
 	} else {
-		static int (*real)(const char *, struct dirent ***,
-		                   int (*)(const struct dirent *),
-		                   int (*)(const struct dirent **, const struct dirent **)) = NULL;
-		if (!real)
-			real = (int (*)(const char *, struct dirent ***,
-			                int (*)(const struct dirent *),
-			                int (*)(const struct dirent **, const struct dirent **))) loadRealFunc("scandir");
-		return real(dirp, namelist, filter, compar);
+		return real_scandir(dirp, namelist, filter, compar);
 	}
 }
 
@@ -303,18 +310,14 @@ int rename(const char *old, const char *new_) {
 		clearUserFilesFromCache(1);
 		return FileJNI_rename(oldCanon.c_str(), newCanon.c_str());
 	} else {
-		static int (*real)(const char *, const char *) = NULL;
-		if (!real) real = (int (*)(const char *, const char *)) loadRealFunc("rename");
-		return real(old, new_);
+		return real_rename(old, new_);
 	}
 }
 
 int chdir(const char *path) {
 	std::string canonical; bool saf;
 	resolve_path(path, canonical, saf);
-	static int (*real)(const char *) = NULL;
-	if (!real) real = (int (*)(const char *)) loadRealFunc("chdir");
-	int ret = real(canonical.c_str());
+	int ret = real_chdir(canonical.c_str());
 	if (ret == 0) setCurrentWorkingDirectory(canonical);
 	return ret;
 }

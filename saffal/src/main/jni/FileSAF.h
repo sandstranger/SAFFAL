@@ -4,7 +4,6 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <dirent.h>
-#include <unistd.h>
 #include <cstddef>
 
 #ifdef __cplusplus
@@ -14,7 +13,7 @@ extern "C" {
 FILE*   fopen(const char* filename, const char* mode);
 int     fclose(FILE* file);
 int     close(int fd);
-int     open(const char* path, int oflag, mode_t modes);
+int     open(const char* path, int flags, ...);
 int     __open_2(const char* path, int oflag, mode_t modes);
 int     stat(const char* path, struct stat* statbuf);
 int     access(const char* pathname, int mode);
@@ -28,7 +27,7 @@ int     remove(const char* path);
 int     rename(const char* old_filename, const char* new_filename);
 int     mkdir(const char* path, mode_t mode);
 int     chdir(const char* path);
-char*   getcwd(char* buf, size_t size);
+char* _Nullable getcwd(char* const buf, size_t size);
 
 #ifdef __cplusplus
 }

@@ -1,6 +1,4 @@
-
-
-#include <stdio.h>
+#include <cstdio>
 
 void FileCache_init();
 

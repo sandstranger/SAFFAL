@@ -7,9 +7,13 @@
 #include <pthread.h>
 #include <vector>
 #include <atomic>
+#include <shadowhook.h>
+#include <dirent.h>
+#include "FileSAF.h"
 
 #define LOGI(...) ((void)0)
 #define LOGW(...) ((void)0)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "HOOK", __VA_ARGS__)
 
 #if 0
 #define MUTEX_LOCK   pthread_mutex_lock(&lock);
@@ -20,11 +24,64 @@
 #endif
 
 static JavaVM* m_jvm = nullptr;
-static JNIEnv* firstEnv = nullptr;
 static pthread_mutex_t lock;
+static bool posixCallsWasHooked = false;
 
-extern bool cacheInvalidPaths;
 extern std::atomic<bool> g_safEnabled;
+extern FILE *(*real_fopen)(const char *, const char *);
+extern int (*real_open)(const char *, int, ...);
+extern int (*real_fclose)(FILE *);
+extern int (*real_close)(int);
+extern int (*real_mkdir)(const char *, mode_t);
+extern int (*real_stat)(const char *, struct stat *);
+extern int (*real_access)(const char *, int);
+extern int (*real_remove)(const char *);
+extern struct dirent *(*real_readdir)(DIR *);
+extern DIR *(*real_opendir)(const char *);
+extern int (*real_readdir_r)(DIR *,
+                             struct dirent *,
+                             struct dirent **);
+extern int (*real_closedir)(DIR *);
+extern int (*real_scandir)(const char *,
+                           struct dirent ***,
+                           int (*)(const struct dirent *),
+                           int (*)(const struct dirent **,
+                                   const struct dirent **));
+extern int (*real_rename)(const char *,
+                          const char *);
+extern int (*real_chdir)(const char *);
+extern char *(*real_getcwd)(char* const buf, size_t size);
+
+extern "C" void *loadRealFunc(const char *name);
+
+template <typename Fn>
+static bool hook_by_name(const char* lib_name,
+                         const char* sym_name,
+                         Fn replacement,
+                         Fn* original,
+                         uint32_t flags = SHADOWHOOK_HOOK_DEFAULT)
+{
+    void* stub = nullptr;
+
+    if (flags == SHADOWHOOK_HOOK_DEFAULT) {
+        stub = shadowhook_hook_sym_name(lib_name, sym_name,
+                                        (void*)replacement,
+                                        (void**)original);
+    } else {
+        stub = shadowhook_hook_sym_name_2(lib_name, sym_name,
+                                          (void*)replacement,
+                                          (void**)original,
+                                          flags);
+    }
+
+    if (!stub) {
+        int err = shadowhook_get_errno();
+        LOGE("hook_by_name failed: %d - %s", err, shadowhook_to_errmsg(err));
+        return false;
+    }
+
+    return true;
+}
 
 static bool getEnv(JNIEnv **jniEnv) {
 	if (m_jvm == nullptr) {
@@ -52,7 +109,7 @@ static jmethodID delete_method;
 static jmethodID opendir_method;
 static jmethodID rename_method;
 
-extern "C" __attribute__((visibility("default"))) jint JNI_OnLoad(JavaVM* vm, void* reserved) {
+extern "C" __attribute__((used)) __attribute__((visibility("default"))) jint JNI_OnLoad(JavaVM* vm, void* reserved) {
 	m_jvm = vm;
 	pthread_mutex_init(&lock, NULL);
 
@@ -68,12 +125,11 @@ extern "C" __attribute__((visibility("default"))) jint JNI_OnLoad(JavaVM* vm, vo
 	delete_method = env->GetStaticMethodID(FileJNI_cls, "delete", "(Ljava/lang/String;)I");
 	opendir_method= env->GetStaticMethodID(FileJNI_cls, "opendir","(Ljava/lang/String;)[Ljava/lang/String;");
 	rename_method = env->GetStaticMethodID(FileJNI_cls, "rename", "(Ljava/lang/String;Ljava/lang/String;)I");
-
 	FileCache_init();
 	return JNI_VERSION_1_6;
 }
 
-extern "C" JNIEXPORT void JNICALL
+extern "C" __attribute__((used)) __attribute__((visibility("default"))) JNIEXPORT void JNICALL
 Java_com_opentouchgaming_saffal_FileJNI_initSAFPaths(JNIEnv* env, jclass cls, jobjectArray SAFPaths, jint cacheNativeFs) {
 	clearSAFPaths();
 
@@ -87,7 +143,7 @@ Java_com_opentouchgaming_saffal_FileJNI_initSAFPaths(JNIEnv* env, jclass cls, jo
 	}
 }
 
-extern "C" JNIEXPORT void JNICALL
+extern "C" __attribute__((used)) __attribute__((visibility("default"))) JNIEXPORT void JNICALL
 Java_com_opentouchgaming_saffal_FileJNI_initSafePaths(JNIEnv* env, jclass, jobjectArray paths) {
 	clearSafePaths();
 	jsize count = env->GetArrayLength(paths);
@@ -100,9 +156,39 @@ Java_com_opentouchgaming_saffal_FileJNI_initSafePaths(JNIEnv* env, jclass, jobje
 	}
 }
 
-extern "C" JNIEXPORT void JNICALL
+extern "C" __attribute__((used)) __attribute__((visibility("default"))) JNIEXPORT void JNICALL
 Java_com_opentouchgaming_saffal_FileJNI_nativeSetSafEnabled(JNIEnv*, jclass, jboolean enabled) {
 	g_safEnabled.store(enabled, std::memory_order_release);
+}
+
+extern "C" __attribute__((used)) __attribute__((visibility("default"))) JNIEXPORT void JNICALL
+Java_com_opentouchgaming_saffal_FileJNI_initPosixHooks(JNIEnv*, jclass)
+{
+    if (posixCallsWasHooked){
+        return;
+    }
+
+	if (shadowhook_init(SHADOWHOOK_MODE_UNIQUE, false) != 0) {
+		LOGE("shadowhook_init failed: %s", shadowhook_to_errmsg(shadowhook_get_errno()));
+		return;
+	}
+	hook_by_name("libc.so", "fopen", 	 fopen,     &real_fopen);
+    hook_by_name("libc.so", "open",      open,      &real_open);
+    hook_by_name("libc.so", "rename",    rename,    &real_rename);
+    hook_by_name("libc.so", "chdir",     chdir,     &real_chdir);
+    hook_by_name("libc.so", "readdir",   readdir,   &real_readdir);
+    hook_by_name("libc.so", "close",     close,     &real_close);
+    hook_by_name("libc.so", "access",    access,    &real_access);
+    hook_by_name("libc.so", "mkdir",     mkdir,     &real_mkdir);
+    hook_by_name("libc.so", "fclose",    fclose,    &real_fclose);
+    hook_by_name("libc.so", "closedir",  closedir,  &real_closedir);
+    hook_by_name("libc.so", "scandir",   scandir,   &real_scandir);
+    hook_by_name("libc.so", "stat",      stat,      &real_stat);
+    hook_by_name("libc.so", "readdir_r", readdir_r, &real_readdir_r);
+    hook_by_name("libc.so", "remove",    remove,    &real_remove);
+    hook_by_name("libc.so", "opendir",   opendir,   &real_opendir);
+    hook_by_name("libc.so", "getcwd", 	 getcwd,       &real_getcwd);
+	posixCallsWasHooked = true;
 }
 
 int FileJNI_fopen(const char* filename, const char* mode) {
